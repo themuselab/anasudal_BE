@@ -18,7 +18,24 @@ set -euo pipefail
 USER_NAME=anasudal-deploy
 PROJECT=anasudal
 
-echo "▶ 계정: $(aws sts get-caller-identity --query Account --output text)"
+# ── 0. 사전 확인 ────────────────────────────────────────────────────────────
+# 자격 증명부터 확인한다. 여기서 막히면 아래 작업은 전부 같은 이유로 실패한다.
+if ! CALLER=$(aws sts get-caller-identity --query Arn --output text 2>&1); then
+  echo "✗ AWS 자격 증명을 쓸 수 없습니다."
+  echo "$CALLER" | head -3 | sed 's/^/    /'
+  echo
+  echo "  · CloudShell 이면 → 우측 상단 Actions → Restart AWS CloudShell 후 재실행"
+  echo "  · 루트 사용자는 CloudShell 을 쓸 수 없습니다. 로컬에서 이렇게 하세요:"
+  echo "      aws configure --profile root-bootstrap"
+  echo "      AWS_PROFILE=root-bootstrap bash infra/iam/create-deploy-user.sh"
+  exit 1
+fi
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+echo "▶ 계정: $ACCOUNT"
+echo "▶ 주체: $CALLER"
+case "$CALLER" in
+  *:root) echo "  ⚠ 루트로 실행 중입니다. 스크립트가 끝나면 루트 액세스 키를 삭제하세요." ;;
+esac
 
 # ── 1. 정책 문서 ─────────────────────────────────────────────────────────────
 cat > /tmp/anasudal-core.json <<'CORE'
@@ -234,7 +251,7 @@ INFRA
 # ── 2. 정책 만들기 (있으면 새 버전으로 갱신) ────────────────────────────────
 put_policy () {
   local name="$1" file="$2" arn
-  arn="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):policy/${name}"
+  arn="arn:aws:iam::${ACCOUNT}:policy/${name}"
   if aws iam get-policy --policy-arn "$arn" >/dev/null 2>&1; then
     # 버전은 5개까지 — 가장 오래된 비기본 버전을 지우고 새로 올린다
     aws iam list-policy-versions --policy-arn "$arn" \
@@ -276,12 +293,24 @@ if [ "$COUNT" -ge 2 ]; then
   echo "  - 오래된 키 삭제: $OLD"
 fi
 
-echo
-echo "════════════════════════════════════════════════════════"
-aws iam create-access-key --user-name "$USER_NAME" \
-  --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text \
-  | awk '{printf "AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n", $1, $2}'
-echo "════════════════════════════════════════════════════════"
-echo "위 두 줄이 이번에만 보이는 값입니다. 복사해 두세요."
-echo
-echo "다 쓴 뒤 정리: aws iam delete-access-key --user-name $USER_NAME --access-key-id <키ID>"
+NEW_KEY=$(aws iam create-access-key --user-name "$USER_NAME" \
+  --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
+NEW_ID=${NEW_KEY%%[[:space:]]*}
+NEW_SECRET=${NEW_KEY##*[[:space:]]}
+
+# ANASUDAL_KEY_OUT 이 있으면 화면에 찍지 않고 그 파일로만 넘긴다 (login.sh 가 쓴다).
+# 없으면 — CloudShell 등에서 직접 실행한 경우 — 화면에 한 번만 보여준다.
+if [ -n "${ANASUDAL_KEY_OUT:-}" ]; then
+  ( umask 077; printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' \
+      "$NEW_ID" "$NEW_SECRET" > "$ANASUDAL_KEY_OUT" )
+  echo "  + 액세스 키 발급: $NEW_ID  (화면에 남기지 않고 프로필에 바로 넣습니다)"
+else
+  echo
+  echo "════════════════════════════════════════════════════════"
+  printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\n' "$NEW_ID" "$NEW_SECRET"
+  echo "════════════════════════════════════════════════════════"
+  echo "위 두 줄은 이번에만 보입니다. 복사해 두세요."
+  echo
+  echo "등록:  aws configure --profile anasudal"
+  echo "정리:  aws iam delete-access-key --user-name $USER_NAME --access-key-id <키ID>"
+fi
