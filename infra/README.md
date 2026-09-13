@@ -35,7 +35,8 @@
    │   └──────────────────────────────────────────────┘    │
    └────────────────────────────────────────────────────────┘
 
-   프론트(Vercel) ──HTTP──▶ 게이트웨이 EIP ──▶ nginx ──▶ API
+   프론트(Vercel) ──HTTPS──▶ CloudFront ──HTTP──▶ 게이트웨이 EIP ──▶ nginx ──▶ API
+                            (*.cloudfront.net 인증서, 도메인 불필요)
    관리자 ──────── SSM Session Manager ────▶ 셸 / DB 포트포워딩
 ```
 
@@ -169,7 +170,7 @@ python ../../scripts/smoke_api.py $(terraform output -raw api_https_url)
 > 터널을 연 상태에서:
 > ```bash
 > PW=$(aws ssm get-parameter --name /anasudal/prod/DB_PASSWORD --with-decryption --query Parameter.Value --output text)
-> docker run --rm -e PGPASSWORD="$PW" -v "$(cygpath -w $PWD/db)":/sql -v "$(cygpath -w $PWD/data)":/data >   postgres:16 psql -h host.docker.internal -p 15432 -U anasudal -d anasudal >   -v ON_ERROR_STOP=1 -v csv_dir=/data -f /sql/01_schema.sql
+> docker run --rm -e PGPASSWORD="$PW" \n>   -v "$(cygpath -w $PWD/db)":/sql -v "$(cygpath -w $PWD/data)":/data postgres:16 \n>   psql -h host.docker.internal -p 15432 -U anasudal -d anasudal \n>   -v ON_ERROR_STOP=1 -v csv_dir=/data -f /sql/01_schema.sql
 > ```
 > `cygpath` 는 Git Bash 전용입니다. Linux/macOS 에서는 경로를 그대로 쓰고 `host.docker.internal` 대신 `--network host` 를 씁니다.
 
@@ -178,7 +179,7 @@ python ../../scripts/smoke_api.py $(terraform output -raw api_https_url)
 CORS 는 SSM 파라미터에 있습니다. Vercel 주소를 넣고 재배포하세요.
 
 ```bash
-aws ssm put-parameter --name /anasudal/prod/CORS_ORIGINS --overwrite --type String   --value "https://<당신의앱>.vercel.app,http://localhost:5173"
+aws ssm put-parameter --name /anasudal/prod/CORS_ORIGINS --overwrite --type String \n  --value "https://<당신의앱>.vercel.app,http://localhost:5173"
 aws ecs update-service --cluster anasudal-prod --service api --force-new-deployment
 ```
 
