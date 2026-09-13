@@ -8,9 +8,19 @@
 #                       -> 새 키를 anasudal 프로필에 자동 등록
 #                       -> 루트 키 정리 -> 권한/계정 점검
 #
-#  키를 복사해 어디에 붙여넣을 필요가 없습니다. 시크릿은 화면에 찍지 않습니다.
+#  키 입력 방법은 세 가지. 편한 것을 고르면 됩니다 (자동으로 순서대로 시도).
+#    1) 콘솔에서 받은 .csv 파일  <- 가장 쉬움. 타이핑도 붙여넣기도 없음
+#    2) 메모장에 붙여넣기        <- 터미널 붙여넣기가 안 될 때
+#    3) 터미널에 직접 입력
+#
+#  시크릿은 어느 경우에도 화면에 찍지 않습니다.
 #  (Linux/CloudShell 에서는 같은 폴더의 login.sh 를 쓰세요)
 # =============================================================================
+
+param(
+  # 콘솔에서 받은 액세스 키 파일 경로를 직접 지정할 때 사용
+  [string]$KeyFile
+)
 
 $ErrorActionPreference = 'Continue'
 
@@ -39,6 +49,85 @@ foreach ($f in @('anasudal-deploy-core.json', 'anasudal-deploy-infra.json')) {
   }
 }
 
+# -- 키 읽기 도우미 -----------------------------------------------------------
+# 형식을 가리지 않는다. csv / 메모장 메모 / 아무 텍스트에서나 정규식으로 찾아낸다.
+#   액세스 키 ID : AKIA/ASIA + 영숫자 16자
+#   시크릿       : base64 문자 40자
+function Get-AwsKeyFromText ($text) {
+  if (-not $text) { return $null }
+  $id = $null; $sec = $null
+
+  # (1) key = value 표기  (메모장 템플릿, 환경변수, ~/.aws/credentials 형식)
+  $m = [regex]::Match($text, '(?im)^\s*(?:aws[_ ]?)?access[_ ]?key[_ ]?id\s*[=:]\s*["'']?([A-Z0-9]{16,128})')
+  if ($m.Success) { $id = $m.Groups[1].Value }
+  $m = [regex]::Match($text, '(?im)^\s*(?:aws[_ ]?)?secret[_ ]?access[_ ]?key\s*[=:]\s*["'']?([A-Za-z0-9+/=]{30,128})')
+  if ($m.Success) { $sec = $m.Groups[1].Value }
+
+  # (2) 콘솔에서 받은 .csv — 헤더 이름으로 열을 찾는다.
+  #     IAM 사용자 csv 에는 비밀번호 열이 섞여 있어서, 위치로 찍지 않고 이름으로 찾아야 한다.
+  if (-not ($id -and $sec)) {
+    try {
+      foreach ($r in @($text | ConvertFrom-Csv)) {
+        foreach ($p in $r.PSObject.Properties) {
+          $n = ($p.Name -replace '[^A-Za-z]', '').ToLower()
+          if ($n -eq 'accesskeyid'     -and $p.Value) { $id  = ([string]$p.Value).Trim() }
+          if ($n -eq 'secretaccesskey' -and $p.Value) { $sec = ([string]$p.Value).Trim() }
+        }
+        if ($id -and $sec) { break }
+      }
+    } catch { }
+  }
+
+  # (3) 그래도 못 찾으면 생김새로 찾는다 (아무 텍스트나 통째로 붙여넣은 경우)
+  if (-not $id) {
+    $m = [regex]::Match($text, '(?<![A-Z0-9])((?:AKIA|ASIA)[A-Z0-9]{16})(?![A-Z0-9])')
+    if ($m.Success) { $id = $m.Groups[1].Value }
+  }
+  if (-not $sec) {
+    $m = [regex]::Match($text, '(?<![A-Za-z0-9+/=])([A-Za-z0-9+/=]{40})(?![A-Za-z0-9+/=])')
+    if ($m.Success) { $sec = $m.Groups[1].Value }
+  }
+
+  if ($id -and $sec -and $id -match '^(AKIA|ASIA)[A-Z0-9]{16}$') {
+    return [pscustomobject]@{ Id = $id; Secret = $sec }
+  }
+  return $null
+}
+
+# 콘솔에서 받은 키 파일을 흔히 저장되는 위치에서 찾는다
+function Find-KeyFile {
+  $dirs = @("$env:USERPROFILE\Downloads", "$env:USERPROFILE\Desktop", (Get-Location).Path)
+  $pats = @('rootkey*.csv', '*accessKeys*.csv', '*credentials*.csv', '*access*key*.csv')
+  $hits = @()
+  foreach ($d in $dirs) {
+    if (-not (Test-Path $d)) { continue }
+    foreach ($p in $pats) {
+      $hits += Get-ChildItem -Path $d -Filter $p -File -ErrorAction SilentlyContinue
+    }
+  }
+  return @($hits | Sort-Object FullName -Unique |
+                   Sort-Object LastWriteTime -Descending |
+                   Select-Object -First 5)
+}
+
+# 터미널 붙여넣기가 안 될 때: 메모장에 붙여넣게 한다
+function Read-KeyViaNotepad {
+  $tmp = Join-Path $env:TEMP ('anasudal-key-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
+  @(
+    '이 파일에 액세스 키를 붙여넣고 저장(Ctrl+S) 한 뒤 메모장을 닫으세요.',
+    '아래 두 줄의 = 뒤에 값을 채워도 되고, 콘솔에서 복사한 내용을 통째로',
+    '아무 데나 붙여넣어도 알아서 찾아냅니다.',
+    '',
+    'AWS_ACCESS_KEY_ID=',
+    'AWS_SECRET_ACCESS_KEY='
+  ) | Set-Content -Path $tmp -Encoding utf8
+  Info '메모장이 열립니다. 키를 붙여넣고 저장한 뒤 창을 닫으세요.'
+  Start-Process notepad.exe -ArgumentList $tmp -Wait
+  $k = Get-AwsKeyFromText (Get-Content $tmp -Raw)
+  Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+  return $k
+}
+
 # -- 1. 루트 로그인 -----------------------------------------------------------
 Say '1/5  루트 로그인'
 
@@ -46,27 +135,120 @@ $CallerArn = & aws sts get-caller-identity --profile $BOOT --query Arn --output 
 if ($LASTEXITCODE -eq 0 -and $CallerArn) {
   Info '이미 로그인돼 있습니다. 넘어갑니다.'
 } else {
-  Write-Host @'
 
-  루트 액세스 키가 필요합니다. 아직 없으면 이렇게 만드세요 (콘솔, 1분):
+  $key = $null
+
+  # (a) -KeyFile 로 직접 지정한 경우
+  if ($KeyFile) {
+    if (-not (Test-Path $KeyFile)) { Bad "파일이 없습니다: $KeyFile"; exit 1 }
+    $key = Get-AwsKeyFromText (Get-Content $KeyFile -Raw)
+    if (-not $key) { Bad "이 파일에서 액세스 키를 찾지 못했습니다: $KeyFile"; exit 1 }
+    Ok "키 파일에서 읽었습니다: $(Split-Path $KeyFile -Leaf)"
+  }
+
+  # (b) 메뉴로 고르기
+  if (-not $key) {
+    Write-Host @'
+
+  루트 액세스 키가 필요합니다. 아직 없으면 콘솔에서 만드세요 (1분):
 
     AWS 콘솔 우측 상단 계정 이름
       -> 보안 자격 증명 (Security credentials)
       -> 아래로 스크롤 -> 액세스 키 -> 액세스 키 만들기
       -> 경고 체크박스 확인 -> 만들기
-
-  키와 시크릿이 그 화면에서만 보입니다. 아래에 그대로 붙여넣으세요.
-  (시크릿은 입력해도 화면에 안 보일 수 있습니다. 리전/출력형식은 Enter)
+      -> [ .csv 파일 다운로드 ] 버튼을 누르세요  <<< 이게 제일 편합니다
 
 '@
-  aws configure --profile $BOOT
-  $null = & aws configure set region $REGION --profile $BOOT
-  $null = & aws configure set output json    --profile $BOOT
+    $tries = 0
+    while (-not $key) {
+      $tries++
+      if ($tries -gt 8) {
+        Bad '입력을 받지 못했습니다. 아무것도 만들지 않고 종료합니다.'
+        Info '키 파일이 있다면 경로를 직접 주고 다시 실행하세요:'
+        Info '  powershell -ExecutionPolicy Bypass -File .\infra\scripts\login.ps1 -KeyFile "C:\경로\rootkey.csv"'
+        exit 1
+      }
+      $files = Find-KeyFile
+      Write-Host '  키를 어떻게 넣을까요?'
+      $i = 0
+      foreach ($f in $files) {
+        $i++
+        $mins = ((Get-Date) - $f.LastWriteTime).TotalMinutes
+        if     ($mins -lt 60)   { $when = "{0}분 전" -f [int]$mins }
+        elseif ($mins -lt 1440) { $when = "{0}시간 전" -f [int]($mins / 60) }
+        else                    { $when = $f.LastWriteTime.ToString('yyyy-MM-dd') }
+        $line = "    [{0}] {1}   ({2}, {3})" -f $i, $f.Name, (Split-Path $f.DirectoryName -Leaf), $when
+        if ($mins -gt 1440) {
+          Write-Host ($line + '  <- 오래된 파일. 방금 만든 키가 맞는지 확인하세요') -ForegroundColor DarkGray
+        } else {
+          Write-Host $line
+        }
+      }
+      if ($files.Count -eq 0) {
+        Write-Host '    (다운로드 폴더에서 키 파일(.csv)을 찾지 못했습니다)'
+      }
+      Write-Host '    [F] 다른 위치의 키 파일 경로를 입력'
+      Write-Host '    [N] 메모장에 붙여넣기   <- 터미널 붙여넣기가 안 될 때'
+      Write-Host '    [T] 터미널에 직접 입력'
+      Write-Host '    [Q] 그만두기'
+      $sel = Read-Host '  선택'
+
+      if ($sel -match '^[0-9]+$' -and [int]$sel -ge 1 -and [int]$sel -le $files.Count) {
+        $pick = $files[[int]$sel - 1]
+        $key = Get-AwsKeyFromText (Get-Content $pick.FullName -Raw)
+        if ($key) { Ok "읽었습니다: $($pick.Name)" }
+        else      { Warn "$($pick.Name) 에서 액세스 키를 찾지 못했습니다. 다시 고르세요." }
+      }
+      elseif ($sel -eq 'F' -or $sel -eq 'f') {
+        $path = (Read-Host '  파일 경로').Trim('"', ' ')
+        if (Test-Path $path) {
+          $key = Get-AwsKeyFromText (Get-Content $path -Raw)
+          if (-not $key) { Warn '그 파일에서 액세스 키를 찾지 못했습니다.' }
+        } else { Warn '파일이 없습니다.' }
+      }
+      elseif ($sel -eq 'N' -or $sel -eq 'n') {
+        $key = Read-KeyViaNotepad
+        if (-not $key) { Warn '메모장 내용에서 액세스 키를 찾지 못했습니다.' }
+      }
+      elseif ($sel -eq 'T' -or $sel -eq 't') {
+        Write-Host @'
+
+  붙여넣기가 안 되면:
+    · 마우스 오른쪽 버튼 클릭 = 붙여넣기 (Windows PowerShell 기본 동작)
+    · 또는 Ctrl+Shift+V
+    · 창 제목 표시줄 오른쪽 클릭 -> 속성 -> "Ctrl+Shift+C/V를 복사/붙여넣기로 사용" 체크
+  (리전과 출력 형식은 그냥 Enter)
+
+'@
+        aws configure --profile $BOOT
+        $null = & aws configure set region $REGION --profile $BOOT
+        $null = & aws configure set output json    --profile $BOOT
+        $probe = & aws sts get-caller-identity --profile $BOOT --query Arn --output text 2>$null
+        if ($LASTEXITCODE -eq 0 -and $probe) { break }
+        Warn '입력한 키로 인증되지 않았습니다. 다시 고르세요.'
+      }
+      elseif ($sel -eq 'Q' -or $sel -eq 'q') {
+        Info '그만둡니다. 아무것도 만들지 않았습니다.'
+        exit 1
+      }
+      else { Warn '목록에 있는 번호나 글자를 입력하세요.' }
+      Write-Host ''
+    }
+  }
+
+  if ($key) {
+    $null = & aws configure set aws_access_key_id     $key.Id     --profile $BOOT
+    $null = & aws configure set aws_secret_access_key $key.Secret --profile $BOOT
+    $null = & aws configure set region $REGION --profile $BOOT
+    $null = & aws configure set output json    --profile $BOOT
+    $key = $null
+    Remove-Variable key -ErrorAction SilentlyContinue
+  }
 
   $CallerArn = & aws sts get-caller-identity --profile $BOOT --query Arn --output text 2>$null
   if ($LASTEXITCODE -ne 0 -or -not $CallerArn) {
-    Bad '인증 실패 - 키를 잘못 붙여넣었을 수 있습니다.'
-    Info '다시 실행해 보세요. 방금 만든 키가 맞는지도 확인하세요.'
+    Bad '인증 실패 - 키가 유효하지 않습니다.'
+    Info '콘솔에서 방금 만든 키가 맞는지, 비활성 상태는 아닌지 확인하고 다시 실행하세요.'
     exit 1
   }
 }
