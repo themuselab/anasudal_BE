@@ -19,7 +19,12 @@ output "rds_endpoint" {
 }
 
 output "ssm_database_url_param" { value = aws_ssm_parameter.database_url.name }
-output "api_internal_host"      { value = aws_ssm_parameter.api_internal_host.value }
+# SSM 파라미터의 .value 는 내용과 무관하게 민감값으로 취급된다.
+# 값 자체는 그냥 내부 DNS 이름이므로 원본에서 다시 만든다.
+output "api_internal_host" {
+  value       = "${aws_service_discovery_service.api.name}.${aws_service_discovery_private_dns_namespace.ns.name}"
+  description = "게이트웨이 nginx 가 바라보는 내부 DNS"
+}
 
 output "gha_deploy_role_arn" {
   value = var.github_repo != "" ? aws_iam_role.gha_deploy[0].arn : null

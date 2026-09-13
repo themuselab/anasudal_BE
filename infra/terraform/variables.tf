@@ -48,3 +48,9 @@ variable "github_repo" {
   description = "org/repo 형식. 예: anasudal/anasudal"
   default     = ""
 }
+
+variable "create_github_oidc" {
+  description = "GitHub Actions OIDC 공급자를 직접 만든다. 계정에 이미 있으면 false"
+  type        = bool
+  default     = true
+}

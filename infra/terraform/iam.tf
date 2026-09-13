@@ -77,9 +77,27 @@ resource "aws_iam_instance_profile" "gateway" {
 }
 
 # ── GitHub Actions OIDC 배포 역할 (github_repo 지정 시) ────────────────────
+# OIDC 공급자는 계정에 하나만 존재한다. 이 계정엔 아직 없으므로 여기서 만든다.
+# 다른 곳에서 이미 만들어 뒀다면 create_github_oidc = false 로 두고 기존 것을 쓴다.
+resource "aws_iam_openid_connect_provider" "github" {
+  count           = var.github_repo != "" && var.create_github_oidc ? 1 : 0
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  # AWS 는 이 공급자에 대해 지문을 더 이상 검증하지 않지만 API 가 값을 요구한다
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
 data "aws_iam_openid_connect_provider" "github" {
-  count = var.github_repo != "" ? 1 : 0
+  count = var.github_repo != "" && !var.create_github_oidc ? 1 : 0
   url   = "https://token.actions.githubusercontent.com"
+}
+
+locals {
+  github_oidc_arn = var.github_repo == "" ? null : (
+    var.create_github_oidc
+      ? aws_iam_openid_connect_provider.github[0].arn
+      : data.aws_iam_openid_connect_provider.github[0].arn
+  )
 }
 
 data "aws_iam_policy_document" "gha_assume" {
@@ -88,7 +106,7 @@ data "aws_iam_policy_document" "gha_assume" {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
       type        = "Federated"
-      identifiers = [data.aws_iam_openid_connect_provider.github[0].arn]
+      identifiers = [local.github_oidc_arn]
     }
     condition {
       test     = "StringEquals"
