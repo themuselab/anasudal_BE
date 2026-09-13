@@ -19,7 +19,9 @@
 
 param(
   # 콘솔에서 받은 액세스 키 파일 경로를 직접 지정할 때 사용
-  [string]$KeyFile
+  [string]$KeyFile,
+  # 정책 JSON 만 다시 올리고 끝낸다 (사용자·액세스 키는 건드리지 않음)
+  [switch]$PoliciesOnly
 )
 
 $ErrorActionPreference = 'Continue'
@@ -110,6 +112,27 @@ function Find-KeyFile {
                    Select-Object -First 5)
 }
 
+# 프로필의 자격 증명을 실제로 지운다.
+# `aws configure set aws_access_key_id ''` 는 값을 지우지 못한다 — 파일에서 직접 걷어내야 한다.
+function Remove-ProfileCredentials ($ProfileName) {
+  $cred = Join-Path $env:USERPROFILE '.aws\credentials'
+  if (-not (Test-Path $cred)) { return $false }
+  $out   = New-Object System.Collections.Generic.List[string]
+  $skip  = $false
+  $found = $false
+  foreach ($l in (Get-Content $cred)) {
+    if ($l -match '^\s*\[(.+?)\]\s*$') {
+      $skip = ($Matches[1] -eq $ProfileName)
+      if ($skip) { $found = $true; continue }
+    }
+    if (-not $skip) { $out.Add($l) }
+  }
+  if ($found) {
+    [System.IO.File]::WriteAllLines($cred, $out, [System.Text.UTF8Encoding]::new($false))
+  }
+  return $found
+}
+
 # 터미널 붙여넣기가 안 될 때: 메모장에 붙여넣게 한다
 function Read-KeyViaNotepad {
   $tmp = Join-Path $env:TEMP ('anasudal-key-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
@@ -191,7 +214,8 @@ if ($LASTEXITCODE -eq 0 -and $CallerArn) {
       Write-Host '    [N] 메모장에 붙여넣기   <- 터미널 붙여넣기가 안 될 때'
       Write-Host '    [T] 터미널에 직접 입력'
       Write-Host '    [Q] 그만두기'
-      $sel = Read-Host '  선택'
+      $sel = ''
+      try { $sel = Read-Host '  선택' } catch { $sel = '' }
 
       if ($sel -match '^[0-9]+$' -and [int]$sel -ge 1 -and [int]$sel -le $files.Count) {
         $pick = $files[[int]$sel - 1]
@@ -298,6 +322,16 @@ function Set-ProjectPolicy ($Name, $SrcFile) {
 $CoreArn  = Set-ProjectPolicy 'anasudal-deploy-core'  (Join-Path $IamDir 'anasudal-deploy-core.json')
 $InfraArn = Set-ProjectPolicy 'anasudal-deploy-infra' (Join-Path $IamDir 'anasudal-deploy-infra.json')
 
+if ($PoliciesOnly) {
+  Ok '정책만 갱신했습니다. 사용자와 액세스 키는 그대로 둡니다.'
+  # 이 실행에서 루트 키를 불러왔다면 다시 지우고 나간다
+  $null = Remove-ProfileCredentials $BOOT
+  $still = & aws sts get-caller-identity --profile $BOOT --query Arn --output text 2>$null
+  if ($LASTEXITCODE -ne 0) { Ok "[$BOOT] 프로필의 루트 키를 다시 지웠습니다." }
+  else { Bad "[$BOOT] 에 루트 키가 남았습니다. 직접 지우세요." }
+  exit 0
+}
+
 $null = & aws iam get-user --user-name $USERNAME --profile $BOOT 2>$null
 if ($LASTEXITCODE -eq 0) {
   Info "사용자 있음: $USERNAME"
@@ -359,7 +393,9 @@ Say '4/5  루트 키 정리'
 if ($IsRoot -and $Ready) {
   Info '루트 키는 계정 전체를 열 수 있어서, 이제 없애는 게 안전합니다.'
   Info '(새 키가 동작하는 것을 위에서 확인했습니다)'
-  $ans = Read-Host '  지금 삭제할까요? 삭제하려면 yes 입력'
+  # 입력을 못 받는 환경(자동 실행 등)에서는 삭제하지 않고 넘어간다
+  $ans = ''
+  try { $ans = Read-Host '  지금 삭제할까요? 삭제하려면 yes 입력' } catch { $ans = '' }
   if ($ans -eq 'yes') {
     $rk = & aws iam list-access-keys --profile $BOOT `
             --query 'AccessKeyMetadata[0].AccessKeyId' --output text 2>$null
@@ -377,9 +413,17 @@ if ($IsRoot -and $Ready) {
   } else {
     Warn '건너뜁니다. 나중에 콘솔에서 꼭 지우세요 (계정 이름 -> 보안 자격 증명).'
   }
-  $null = & aws configure set aws_access_key_id     '' --profile $BOOT 2>$null
-  $null = & aws configure set aws_secret_access_key '' --profile $BOOT 2>$null
-  Ok "이 PC 의 [$BOOT] 프로필에서도 키를 비웠습니다."
+  $removed = Remove-ProfileCredentials $BOOT
+  $still = & aws sts get-caller-identity --profile $BOOT --query Arn --output text 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Ok "이 PC 의 [$BOOT] 프로필에서 루트 키를 지웠습니다."
+  } else {
+    Bad "[$BOOT] 프로필에 루트 키가 아직 남아 있습니다. 직접 지우세요:"
+    Info "  notepad $env:USERPROFILE\.aws\credentials   ([$BOOT] 항목 삭제)"
+  }
+  if ($KeyFile -and (Test-Path $KeyFile)) {
+    Warn "다운로드한 키 파일도 지우세요: $KeyFile"
+  }
 } else {
   Info '루트가 아니거나 확인이 끝나지 않아 건너뜁니다.'
 }

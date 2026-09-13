@@ -34,6 +34,50 @@
       }
     },
     {
+      "Sid": "HardDenyExistingSyakProject",
+      "Effect": "Deny",
+      "Action": ["ec2:*", "rds:*", "elasticache:*", "ecs:*", "ecr:*"],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/i-0321c7a1c01c26428",
+        "arn:aws:ec2:*:*:vpc/vpc-01e3c57b548ab96e2",
+        "arn:aws:ec2:*:*:subnet/subnet-037bf52776e6589d0",
+        "arn:aws:ec2:*:*:subnet/subnet-03fce78ed35c069b0",
+        "arn:aws:ec2:*:*:subnet/subnet-02af8a2954ee0b713",
+        "arn:aws:ec2:*:*:subnet/subnet-0e76cb1179d45f6b3",
+        "arn:aws:ec2:*:*:security-group/sg-05773b2de5f9d0e45",
+        "arn:aws:ec2:*:*:security-group/sg-0ec5e88deb398a6e6",
+        "arn:aws:ec2:*:*:security-group/sg-00cc9c33a56a887ac",
+        "arn:aws:rds:*:*:db:syak-postgres",
+        "arn:aws:rds:*:*:subgrp:*syak*",
+        "arn:aws:ecs:*:*:cluster/syak",
+        "arn:aws:ecs:*:*:service/syak/*",
+        "arn:aws:ecs:*:*:task-definition/syak*:*",
+        "arn:aws:ecr:*:*:repository/syak-backend"
+      ]
+    },
+    {
+      "Sid": "DenyRetaggingOthersEc2",
+      "Effect": "Deny",
+      "Action": ["ec2:CreateTags", "ec2:DeleteTags"],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": { "aws:ResourceTag/Project": "anasudal" },
+        "Null": { "ec2:CreateAction": "true" }
+      }
+    },
+    {
+      "Sid": "DenyRetaggingOthersData",
+      "Effect": "Deny",
+      "Action": [
+        "rds:AddTagsToResource", "rds:RemoveTagsFromResource",
+        "elasticache:AddTagsToResource", "elasticache:RemoveTagsFromResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": { "aws:ResourceTag/Project": "anasudal" }
+      }
+    },
+    {
       "Sid": "DenyAccountWideDamage",
       "Effect": "Deny",
       "Action": [
