@@ -28,7 +28,9 @@ MOUNT="$ROOT/data"
 if command -v cygpath >/dev/null 2>&1; then MOUNT=$(cygpath -w "$MOUNT"); fi
 
 psql_run () {
-  docker run --rm -e PGPASSWORD="$PW" -v "$MOUNT":/data postgres:16 \
+  # -i 가 없으면 컨테이너에 stdin 이 연결되지 않아, -f /dev/stdin 으로 넘긴 SQL 이
+  # 통째로 무시된다(오류도 없이 0건 처리됨). 반드시 있어야 한다.
+  docker run --rm -i -e PGPASSWORD="$PW" -v "$MOUNT":/data postgres:16 \
     psql -h "$HOST" -p "$PORT" -U anasudal -d anasudal -v ON_ERROR_STOP=1 "$@"
 }
 
