@@ -119,7 +119,28 @@ Postgres·Redis·API 는 모두 `127.0.0.1` 에만 바인딩됩니다. 밖에서
 
 ---
 
+## 현재 배포 상태 (2026-09-13)
+
+| | |
+|---|---|
+| **API (HTTPS)** | `https://d180wuyf09twzy.cloudfront.net` ← 프론트는 이 주소를 쓴다 |
+| API (직통 HTTP) | `http://3.35.39.226` — 디버깅용. 브라우저에선 mixed content 로 막힌다 |
+| 인스턴스 | `i-002703d3b1021d0f9` (t3.small, ap-northeast-2a) |
+| 컨테이너 | api(healthy) · ecs-agent(healthy) · anasudal-pg · anasudal-redis |
+| DB | region 218 · institution 2,866 · institution_area_price 12,925 · kb_chunk 1,473(전량 임베딩) |
+| CI 역할 | `arn:aws:iam::181250800061:role/anasudal-prod-gha-deploy` |
+
+`scripts/smoke_api.py` 전 항목 통과 (HTTPS 경유, 실제 Gemini 호출 포함).
+
+---
+
 ## 처음부터 배포하기
+
+필요한 도구: AWS CLI, Terraform, Docker, **Session Manager 플러그인**
+
+```bash
+winget install Hashicorp.Terraform Amazon.SessionManagerPlugin
+```
 
 ```bash
 # 1. 로그인 + 전용 IAM 사용자 (1회)
@@ -141,10 +162,24 @@ cd infra/terraform && terraform init && terraform apply
 python ../../scripts/kb_to_csv.py && ../scripts/db-init.sh
 
 # 6. 확인
-curl http://$(terraform output -raw gateway_public_ip)/health
+python ../../scripts/smoke_api.py $(terraform output -raw api_https_url)
+```
 
-# 7. 이후 배포: GitHub Secrets 의 AWS_DEPLOY_ROLE_ARN 에
-#    `terraform output -raw gha_deploy_role_arn` 값을 넣고 main 에 push
+> **psql 이 없다면** `db-init.sh` 대신 도커로 같은 일을 할 수 있습니다(설치 불필요).
+> 터널을 연 상태에서:
+> ```bash
+> PW=$(aws ssm get-parameter --name /anasudal/prod/DB_PASSWORD --with-decryption --query Parameter.Value --output text)
+> docker run --rm -e PGPASSWORD="$PW" -v "$(cygpath -w $PWD/db)":/sql -v "$(cygpath -w $PWD/data)":/data >   postgres:16 psql -h host.docker.internal -p 15432 -U anasudal -d anasudal >   -v ON_ERROR_STOP=1 -v csv_dir=/data -f /sql/01_schema.sql
+> ```
+> `cygpath` 는 Git Bash 전용입니다. Linux/macOS 에서는 경로를 그대로 쓰고 `host.docker.internal` 대신 `--network host` 를 씁니다.
+
+### 프론트엔드 연결
+
+CORS 는 SSM 파라미터에 있습니다. Vercel 주소를 넣고 재배포하세요.
+
+```bash
+aws ssm put-parameter --name /anasudal/prod/CORS_ORIGINS --overwrite --type String   --value "https://<당신의앱>.vercel.app,http://localhost:5173"
+aws ecs update-service --cluster anasudal-prod --service api --force-new-deployment
 ```
 
 ---
