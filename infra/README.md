@@ -170,7 +170,8 @@ python ../../scripts/smoke_api.py $(terraform output -raw api_https_url)
 > 터널을 연 상태에서:
 > ```bash
 > PW=$(aws ssm get-parameter --name /anasudal/prod/DB_PASSWORD --with-decryption --query Parameter.Value --output text)
-> docker run --rm -e PGPASSWORD="$PW" \n>   -v "$(cygpath -w $PWD/db)":/sql -v "$(cygpath -w $PWD/data)":/data postgres:16 \n>   psql -h host.docker.internal -p 15432 -U anasudal -d anasudal \n>   -v ON_ERROR_STOP=1 -v csv_dir=/data -f /sql/01_schema.sql
+> SQL=$(cygpath -w "$PWD/db"); DATA=$(cygpath -w "$PWD/data")
+> docker run --rm -e PGPASSWORD="$PW" -v "$SQL":/sql -v "$DATA":/data postgres:16 psql -h host.docker.internal -p 15432 -U anasudal -d anasudal -v ON_ERROR_STOP=1 -v csv_dir=/data -f /sql/01_schema.sql
 > ```
 > `cygpath` 는 Git Bash 전용입니다. Linux/macOS 에서는 경로를 그대로 쓰고 `host.docker.internal` 대신 `--network host` 를 씁니다.
 
@@ -179,7 +180,7 @@ python ../../scripts/smoke_api.py $(terraform output -raw api_https_url)
 CORS 는 SSM 파라미터에 있습니다. Vercel 주소를 넣고 재배포하세요.
 
 ```bash
-aws ssm put-parameter --name /anasudal/prod/CORS_ORIGINS --overwrite --type String \n  --value "https://<당신의앱>.vercel.app,http://localhost:5173"
+aws ssm put-parameter --name /anasudal/prod/CORS_ORIGINS --overwrite --type String --value "https://<당신의앱>.vercel.app,http://localhost:5173"
 aws ecs update-service --cluster anasudal-prod --service api --force-new-deployment
 ```
 
@@ -221,6 +222,6 @@ aws ecs update-service --cluster anasudal-prod --service api --force-new-deploym
 
 ## 아직 안 한 것
 
-- **HTTPS** — 도메인이 정해지면 인스턴스에 certbot 을 넣으면 됩니다. Vercel(HTTPS)에서 HTTP 로 호출하면 브라우저가 막으므로(mixed content) 프론트 연동 전에 필요합니다.
+- **CloudFront↔EC2 구간 암호화** — 뷰어 쪽 HTTPS 는 CloudFront 가 끝냈지만 오리진 구간은 HTTP 입니다. 도메인이 생기면 ACM 인증서로 이 구간도 닫는 것이 맞습니다.
 - **자동 백업** — 필요하면 EBS 스냅샷을 하루 한 번 도는 것으로 충분합니다 (DLM 또는 cron).
 - **무중단 배포** — 인스턴스가 한 대라 태스크 교체 중 수 초간 502 가 납니다. 심사에는 문제없는 수준입니다.
