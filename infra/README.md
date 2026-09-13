@@ -129,6 +129,7 @@ Postgres·Redis·API 는 모두 `127.0.0.1` 에만 바인딩됩니다. 밖에서
 | 인스턴스 | `i-002703d3b1021d0f9` (t3.small, ap-northeast-2a) |
 | 컨테이너 | api(healthy) · ecs-agent(healthy) · anasudal-pg · anasudal-redis |
 | DB | region 218 · institution 2,866 · institution_area_price 12,925 · kb_chunk 1,473(전량 임베딩) |
+| 기관 정보 채움률 | 좌표 95.0% · 전화 90.4% · 카카오맵 71.5% · 홈페이지 39.6% · 운영시간 30.7% |
 | CI 역할 | `arn:aws:iam::181250800061:role/anasudal-prod-gha-deploy` |
 
 `scripts/smoke_api.py` 전 항목 통과 (HTTPS 경유, 실제 Gemini 호출 포함).
