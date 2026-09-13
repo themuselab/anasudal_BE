@@ -1,0 +1,150 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyEverywhere",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity",
+        "ecr:GetAuthorizationToken",
+        "ecr:Describe*", "ecr:List*",
+        "ecs:Describe*", "ecs:List*",
+        "logs:Describe*", "logs:Get*",
+        "ssm:Describe*", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
+        "ssm:GetConnectionStatus", "ssm:DescribeInstanceInformation",
+        "servicediscovery:Get*", "servicediscovery:List*", "servicediscovery:Discover*",
+        "iam:Get*", "iam:List*",
+        "kms:DescribeKey", "kms:ListAliases",
+        "application-autoscaling:Describe*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OurEcrRepo",
+      "Effect": "Allow",
+      "Action": "ecr:*",
+      "Resource": "arn:aws:ecr:*:*:repository/anasudal/*"
+    },
+    {
+      "Sid": "EcrCreate",
+      "Effect": "Allow",
+      "Action": ["ecr:CreateRepository", "ecr:TagResource"],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestTag/Project": "anasudal" } }
+    },
+    {
+      "Sid": "OurEcsResources",
+      "Effect": "Allow",
+      "Action": "ecs:*",
+      "Resource": [
+        "arn:aws:ecs:*:*:cluster/anasudal-*",
+        "arn:aws:ecs:*:*:service/anasudal-*/*",
+        "arn:aws:ecs:*:*:task-definition/anasudal-*:*",
+        "arn:aws:ecs:*:*:task/anasudal-*/*"
+      ]
+    },
+    {
+      "Sid": "EcsAccountLevel",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:CreateCluster",
+        "ecs:RegisterTaskDefinition",
+        "ecs:DeregisterTaskDefinition",
+        "ecs:PutClusterCapacityProviders",
+        "ecs:PutAccountSetting",
+        "ecs:TagResource",
+        "ecs:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OurLogGroups",
+      "Effect": "Allow",
+      "Action": "logs:*",
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/ecs/anasudal-*",
+        "arn:aws:logs:*:*:log-group:/ecs/anasudal-*:*"
+      ]
+    },
+    {
+      "Sid": "OurSsmParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters",
+        "ssm:AddTagsToResource",
+        "ssm:RemoveTagsFromResource",
+        "ssm:LabelParameterVersion"
+      ],
+      "Resource": "arn:aws:ssm:*:*:parameter/anasudal/*"
+    },
+    {
+      "Sid": "SsmSessionToOurInstancesOnly",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": { "StringEquals": { "ssm:resourceTag/Project": "anasudal" } }
+    },
+    {
+      "Sid": "SsmSessionDocuments",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": [
+        "arn:aws:ssm:*::document/AWS-StartPortForwardingSessionToRemoteHost",
+        "arn:aws:ssm:*::document/AWS-StartPortForwardingSession",
+        "arn:aws:ssm:*::document/SSM-SessionManagerRunShell"
+      ]
+    },
+    {
+      "Sid": "SsmOwnSessions",
+      "Effect": "Allow",
+      "Action": ["ssm:TerminateSession", "ssm:ResumeSession"],
+      "Resource": "arn:aws:ssm:*:*:session/${aws:username}-*"
+    },
+    {
+      "Sid": "CloudMapForServiceDiscovery",
+      "Effect": "Allow",
+      "Action": "servicediscovery:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "OurRolesOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:UpdateAssumeRolePolicy",
+        "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+        "iam:PutRolePolicy", "iam:DeleteRolePolicy",
+        "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile",
+        "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagRole", "iam:UntagRole", "iam:TagInstanceProfile"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/anasudal-*",
+        "arn:aws:iam::*:instance-profile/anasudal-*"
+      ]
+    },
+    {
+      "Sid": "PassOurRolesOnly",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::*:role/anasudal-*"
+    },
+    {
+      "Sid": "ServiceLinkedRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "ecs.amazonaws.com",
+            "elasticache.amazonaws.com",
+            "rds.amazonaws.com",
+            "ssm.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "NetworkAndDataPlane",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:*",
+        "rds:*",
+        "elasticache:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyTouchingOtherProjects",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:TerminateInstances", "ec2:StopInstances", "ec2:RebootInstances",
+        "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteSecurityGroup",
+        "ec2:DeleteRouteTable", "ec2:DeleteRoute", "ec2:DeleteInternetGateway",
+        "ec2:DeleteNatGateway", "ec2:ReleaseAddress", "ec2:DisassociateAddress",
+        "ec2:ModifyInstanceAttribute", "ec2:ModifyVpcAttribute", "ec2:ModifySubnetAttribute",
+        "ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress",
+        "ec2:DetachInternetGateway", "ec2:DisassociateRouteTable",
+        "rds:DeleteDBInstance", "rds:StopDBInstance", "rds:RebootDBInstance",
+        "rds:ModifyDBInstance", "rds:DeleteDBSubnetGroup", "rds:DeleteDBParameterGroup",
+        "elasticache:DeleteCacheCluster", "elasticache:ModifyCacheCluster",
+        "elasticache:DeleteCacheSubnetGroup"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": { "aws:ResourceTag/Project": "anasudal" }
+      }
+    },
+    {
+      "Sid": "DenyAccountWideDamage",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:DeleteDefaultVpc",
+        "ec2:DisableEbsEncryptionByDefault",
+        "ec2:ModifyEbsDefaultKmsKeyId",
+        "organizations:*",
+        "account:*",
+        "billing:*",
+        "aws-portal:*",
+        "iam:CreateUser", "iam:DeleteUser", "iam:CreateAccessKey", "iam:DeleteAccessKey",
+        "iam:AttachUserPolicy", "iam:PutUserPolicy", "iam:CreatePolicy", "iam:DeletePolicy",
+        "iam:CreatePolicyVersion", "iam:SetDefaultPolicyVersion"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
