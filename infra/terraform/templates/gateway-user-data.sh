@@ -156,9 +156,14 @@ nginx -t && systemctl enable --now nginx && systemctl reload nginx || {
   echo "!! nginx 설정 오류"; nginx -t;
 }
 
-# ── 6. ECS 에이전트 재시작 (설정을 읽게) ────────────────────────────────────
+# ── 6. ECS 에이전트 ─────────────────────────────────────────────────────────
+# ecs.service 에는 After=cloud-final.service 가 걸려 있다. user-data 는 그 cloud-final
+# 안에서 돌기 때문에, 여기서 블로킹으로 `systemctl restart ecs` 를 부르면
+#   user-data → systemctl 완료 대기 → ecs.service → cloud-final 완료 대기 → user-data
+# 로 서로를 기다리는 교착에 빠진다 (실제로 당했다. 부팅이 영원히 끝나지 않는다).
+# --no-block 으로 요청만 걸어두면 cloud-final 이 끝난 뒤 systemd 가 알아서 시작한다.
 systemctl enable ecs || true
-systemctl restart ecs || systemctl start ecs || true
+systemctl --no-block restart ecs || true
 
 echo "=== anasudal init 끝: $(date -Is) ==="
 echo "확인: docker ps ; systemctl status nginx ecs ; curl -s localhost/health"

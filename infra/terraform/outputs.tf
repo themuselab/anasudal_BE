@@ -28,3 +28,13 @@ output "gha_deploy_role_arn" {
   value       = var.github_repo != "" ? aws_iam_role.gha_deploy[0].arn : null
   description = "GitHub Secrets 의 AWS_DEPLOY_ROLE_ARN 에 넣을 값"
 }
+
+output "api_https_url" {
+  value       = "https://${aws_cloudfront_distribution.api.domain_name}"
+  description = "프론트(Vercel)에서 호출할 주소. HTTPS 종단은 CloudFront."
+}
+
+output "api_http_url" {
+  value       = "http://${aws_eip.gateway.public_ip}"
+  description = "게이트웨이 직통. 디버깅용 — 브라우저에서 쓰면 mixed content 로 막힌다."
+}

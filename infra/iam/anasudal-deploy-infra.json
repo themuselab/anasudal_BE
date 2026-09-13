@@ -15,28 +15,56 @@
       "Sid": "DenyTouchingOtherProjects",
       "Effect": "Deny",
       "Action": [
-        "ec2:TerminateInstances", "ec2:StopInstances", "ec2:RebootInstances",
-        "ec2:DeleteVpc", "ec2:DeleteSubnet", "ec2:DeleteSecurityGroup",
-        "ec2:DeleteRouteTable", "ec2:DeleteRoute", "ec2:DeleteInternetGateway",
-        "ec2:DeleteNatGateway", "ec2:ReleaseAddress", "ec2:DisassociateAddress",
-        "ec2:ModifyInstanceAttribute", "ec2:ModifyVpcAttribute", "ec2:ModifySubnetAttribute",
-        "ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress",
-        "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress",
-        "ec2:DetachInternetGateway", "ec2:DisassociateRouteTable",
-        "rds:DeleteDBInstance", "rds:StopDBInstance", "rds:RebootDBInstance",
-        "rds:ModifyDBInstance", "rds:DeleteDBSubnetGroup", "rds:DeleteDBParameterGroup",
-        "elasticache:DeleteCacheCluster", "elasticache:ModifyCacheCluster",
-        "elasticache:DeleteCacheSubnetGroup"
+        "ec2:TerminateInstances",
+        "ec2:StopInstances",
+        "ec2:RebootInstances",
+        "ec2:DeleteVpc",
+        "ec2:DeleteSubnet",
+        "ec2:DeleteSecurityGroup",
+        "ec2:DeleteRouteTable",
+        "ec2:DeleteRoute",
+        "ec2:DeleteInternetGateway",
+        "ec2:DeleteNatGateway",
+        "ec2:ReleaseAddress",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifyVpcAttribute",
+        "ec2:ModifySubnetAttribute",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:DetachInternetGateway",
+        "ec2:DisassociateRouteTable",
+        "rds:DeleteDBInstance",
+        "rds:StopDBInstance",
+        "rds:RebootDBInstance",
+        "rds:ModifyDBInstance",
+        "rds:DeleteDBSubnetGroup",
+        "rds:DeleteDBParameterGroup",
+        "elasticache:DeleteCacheCluster",
+        "elasticache:ModifyCacheCluster",
+        "elasticache:DeleteCacheSubnetGroup",
+        "cloudfront:DeleteDistribution",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:CreateInvalidation"
       ],
       "Resource": "*",
       "Condition": {
-        "StringNotEqualsIfExists": { "aws:ResourceTag/Project": "anasudal" }
+        "StringNotEqualsIfExists": {
+          "aws:ResourceTag/Project": "anasudal"
+        }
       }
     },
     {
       "Sid": "HardDenyExistingSyakProject",
       "Effect": "Deny",
-      "Action": ["ec2:*", "rds:*", "elasticache:*", "ecs:*", "ecr:*"],
+      "Action": [
+        "ec2:*",
+        "rds:*",
+        "elasticache:*",
+        "ecs:*",
+        "ecr:*"
+      ],
       "Resource": [
         "arn:aws:ec2:*:*:instance/i-0321c7a1c01c26428",
         "arn:aws:ec2:*:*:vpc/vpc-01e3c57b548ab96e2",
@@ -52,29 +80,41 @@
         "arn:aws:ecs:*:*:cluster/syak",
         "arn:aws:ecs:*:*:service/syak/*",
         "arn:aws:ecs:*:*:task-definition/syak*:*",
-        "arn:aws:ecr:*:*:repository/syak-backend"
+        "arn:aws:ecr:*:*:repository/syak-backend",
+        "arn:aws:ec2:*:*:network-interface/eni-01c0afec61c562c44"
       ]
     },
     {
       "Sid": "DenyRetaggingOthersEc2",
       "Effect": "Deny",
-      "Action": ["ec2:CreateTags", "ec2:DeleteTags"],
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
       "Resource": "*",
       "Condition": {
-        "StringNotEqualsIfExists": { "aws:ResourceTag/Project": "anasudal" },
-        "Null": { "ec2:CreateAction": "true" }
+        "StringNotEqualsIfExists": {
+          "aws:ResourceTag/Project": "anasudal"
+        },
+        "Null": {
+          "ec2:CreateAction": "true"
+        }
       }
     },
     {
       "Sid": "DenyRetaggingOthersData",
       "Effect": "Deny",
       "Action": [
-        "rds:AddTagsToResource", "rds:RemoveTagsFromResource",
-        "elasticache:AddTagsToResource", "elasticache:RemoveTagsFromResource"
+        "rds:AddTagsToResource",
+        "rds:RemoveTagsFromResource",
+        "elasticache:AddTagsToResource",
+        "elasticache:RemoveTagsFromResource"
       ],
       "Resource": "*",
       "Condition": {
-        "StringNotEqualsIfExists": { "aws:ResourceTag/Project": "anasudal" }
+        "StringNotEqualsIfExists": {
+          "aws:ResourceTag/Project": "anasudal"
+        }
       }
     },
     {
@@ -88,9 +128,16 @@
         "account:*",
         "billing:*",
         "aws-portal:*",
-        "iam:CreateUser", "iam:DeleteUser", "iam:CreateAccessKey", "iam:DeleteAccessKey",
-        "iam:AttachUserPolicy", "iam:PutUserPolicy", "iam:CreatePolicy", "iam:DeletePolicy",
-        "iam:CreatePolicyVersion", "iam:SetDefaultPolicyVersion"
+        "iam:CreateUser",
+        "iam:DeleteUser",
+        "iam:CreateAccessKey",
+        "iam:DeleteAccessKey",
+        "iam:AttachUserPolicy",
+        "iam:PutUserPolicy",
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:SetDefaultPolicyVersion"
       ],
       "Resource": "*"
     }

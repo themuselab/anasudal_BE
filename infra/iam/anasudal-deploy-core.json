@@ -7,15 +7,33 @@
       "Action": [
         "sts:GetCallerIdentity",
         "ecr:GetAuthorizationToken",
-        "ecr:Describe*", "ecr:List*",
-        "ecs:Describe*", "ecs:List*",
-        "logs:Describe*", "logs:Get*",
-        "ssm:Describe*", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
-        "ssm:GetConnectionStatus", "ssm:DescribeInstanceInformation",
-        "servicediscovery:Get*", "servicediscovery:List*", "servicediscovery:Discover*",
-        "iam:Get*", "iam:List*",
-        "kms:DescribeKey", "kms:ListAliases",
-        "application-autoscaling:Describe*"
+        "ecr:Describe*",
+        "ecr:List*",
+        "ecs:Describe*",
+        "ecs:List*",
+        "logs:Describe*",
+        "logs:Get*",
+        "ssm:Describe*",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:GetConnectionStatus",
+        "ssm:DescribeInstanceInformation",
+        "servicediscovery:Get*",
+        "servicediscovery:List*",
+        "servicediscovery:Discover*",
+        "iam:Get*",
+        "iam:List*",
+        "kms:DescribeKey",
+        "kms:ListAliases",
+        "application-autoscaling:Describe*",
+        "ssm:ListTagsForResource",
+        "logs:List*",
+        "cloudfront:Get*",
+        "cloudfront:List*",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommands",
+        "ssm:ListCommandInvocations"
       ],
       "Resource": "*"
     },
@@ -28,9 +46,16 @@
     {
       "Sid": "EcrCreate",
       "Effect": "Allow",
-      "Action": ["ecr:CreateRepository", "ecr:TagResource"],
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:TagResource"
+      ],
       "Resource": "*",
-      "Condition": { "StringEquals": { "aws:RequestTag/Project": "anasudal" } }
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "anasudal"
+        }
+      }
     },
     {
       "Sid": "OurEcsResources",
@@ -84,7 +109,11 @@
       "Effect": "Allow",
       "Action": "ssm:StartSession",
       "Resource": "arn:aws:ec2:*:*:instance/*",
-      "Condition": { "StringEquals": { "ssm:resourceTag/Project": "anasudal" } }
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Project": "anasudal"
+        }
+      }
     },
     {
       "Sid": "SsmSessionDocuments",
@@ -99,7 +128,10 @@
     {
       "Sid": "SsmOwnSessions",
       "Effect": "Allow",
-      "Action": ["ssm:TerminateSession", "ssm:ResumeSession"],
+      "Action": [
+        "ssm:TerminateSession",
+        "ssm:ResumeSession"
+      ],
       "Resource": "arn:aws:ssm:*:*:session/${aws:username}-*"
     },
     {
@@ -112,12 +144,20 @@
       "Sid": "OurRolesOnly",
       "Effect": "Allow",
       "Action": [
-        "iam:CreateRole", "iam:DeleteRole", "iam:UpdateAssumeRolePolicy",
-        "iam:AttachRolePolicy", "iam:DetachRolePolicy",
-        "iam:PutRolePolicy", "iam:DeleteRolePolicy",
-        "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile",
-        "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
-        "iam:TagRole", "iam:UntagRole", "iam:TagInstanceProfile"
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:TagInstanceProfile"
       ],
       "Resource": [
         "arn:aws:iam::*:role/anasudal-*",
@@ -159,6 +199,31 @@
           ]
         }
       }
+    },
+    {
+      "Sid": "CloudFrontForHttps",
+      "Effect": "Allow",
+      "Action": "cloudfront:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SsmRunCommandOnOurInstances",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/Project": "anasudal"
+        }
+      }
+    },
+    {
+      "Sid": "SsmRunCommandDocuments",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:*::document/AWS-RunShellScript"
+      ]
     }
   ]
 }
