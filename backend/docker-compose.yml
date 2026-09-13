@@ -1,0 +1,33 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: anasudal-db
+    environment:
+      POSTGRES_USER: anasudal
+      POSTGRES_PASSWORD: anasudal
+      POSTGRES_DB: anasudal
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../db/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anasudal -d anasudal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: anasudal-redis
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

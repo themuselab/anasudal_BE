@@ -1,0 +1,277 @@
+### 안아수달 API 테스트 (VS Code "REST Client" 확장 / Cursor / IntelliJ HTTP Client)
+### 위에서 아래로 "Send Request" 누르면 됨. 세션·답변 ID는 앞 응답에서 자동으로 받아옴.
+### 응답 규격: 성공 {success:true, data:{...}} · 실패 {success:false, error:{code, message, details?}}
+### AWS에 올린 뒤엔 @baseUrl 만 게이트웨이 IP로 바꾸면 됨.
+
+@baseUrl = http://localhost:8000
+@api = {{baseUrl}}/v1
+
+
+### 0. 헬스체크 (redis: true 면 캐시·칩 회전·질문 제한 켜짐)
+GET {{baseUrl}}/health
+
+
+### ─────────────────── 둘러보기 ───────────────────
+
+### 1. 시도 목록 (기관 수 포함) — 10분 캐시
+GET {{api}}/regions/sido
+
+
+### 2. 시군구 목록
+GET {{api}}/regions?sido=서울특별시
+
+
+### 3. 기관 목록 — 시도 기준 (이름순, 페이지)
+GET {{api}}/institutions?sido=서울특별시&page=1&size=5
+
+
+### 4. 기관 목록 — 시군구 기준 (노원구 = 147)
+GET {{api}}/institutions?region_id=147&size=10
+
+
+### 5. 기관 상세 (영역별 단가 · 방문 여부 · 링크)
+GET {{api}}/institutions/117-81-87814
+
+
+### ─────────────────── 채팅 ───────────────────
+
+### 6. 첫 화면 추천 칩 3개 — {prompt_id, text, emoji}. 호출할 때마다 다른 묶음 (14개 중 라운드로빈)
+GET {{api}}/chat/prompts
+
+
+### 7. 세션 생성 — 지역 없이. 나이도 선택 (문장에서 "30개월" 같은 표현을 읽어냄)
+# @name createSession
+POST {{api}}/sessions
+Content-Type: application/json
+
+{}
+
+###
+@sessionId = {{createSession.response.body.$.data.session_id}}
+
+
+### 8. 세션 조회 (region_id: null)
+GET {{api}}/sessions/{{sessionId}}
+
+
+### 9. AI 질문 — 아이 설명 (tier 1 기대, 8~12초)
+###    text 안에 치료영역·키워드가 **굵게**, 끝에 "기관을 추천해드릴까요?"
+###    intent: "answer", can_recommend: true, ask_region: true (세션에 지역 없음), recommend_for = answer_id
+# @name ask
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "30개월인데 아직 두 단어 문장을 못 만들고 이름 불러도 잘 안 쳐다봐요"
+}
+
+###
+@answerId = {{ask.response.body.$.data.answer_id}}
+
+
+### 9-1. 같은 질문을 SSE 로 — event: meta → delta(본문 조각)* → done(최종 AskResponse) | error
+###      REST Client 는 스트림을 끝까지 받은 뒤 한 번에 보여준다. 브라우저 확인은 프론트 /chat
+POST {{api}}/chat/ask/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "옷 라벨이나 양말 솔기를 못 견디고 머리 감는 것도 심하게 싫어해요"
+}
+
+
+### 10. 같은 질문 다시 — 임베딩은 Redis 캐시 히트 (Gemini 생성만 호출)
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "30개월인데 아직 두 단어 문장을 못 만들고 이름 불러도 잘 안 쳐다봐요"
+}
+
+
+### 11. 답변 근거 3건 (출처·유사도)
+GET {{api}}/chat/answers/{{answerId}}/evidence
+
+
+### 12. "추천해줘" — 세션에 지역이 없으므로 intent: "pick_region" (Gemini 호출 없음, answer_id null)
+###     프론트: 시·도 → 시·군·구 선택 UI 띄우고 13번 호출
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "네, 기관 추천해주세요"
+}
+
+
+### 13. 기관 추천 — 고른 지역(region_id)을 실어 보냄. 세션에 저장되고 그 시·도로 추천
+POST {{api}}/chat/recommend
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "answer_id": "{{answerId}}",
+  "region_id": 147
+}
+
+
+### 14. 세션 조회 — region_id 147, sido 서울특별시로 바뀌어 있음
+GET {{api}}/sessions/{{sessionId}}
+
+
+### 15. 다시 "추천해줘" — 이제 지역이 있으니 intent: "recommend" (프론트는 바로 13번 호출)
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "기관 추천해줘"
+}
+
+
+### 16. 기관 추천 — 다른 지역·상한가로 (region_id 없이 sido만)
+POST {{api}}/chat/recommend
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "answer_id": "{{answerId}}",
+  "sido": "경기도",
+  "max_price": 60000
+}
+
+
+### ─────────────────── 피드백 → 학습 표본 ───────────────────
+
+### 17. 피드백 사유 목록
+GET {{api}}/feedback/reasons
+
+
+### 18. 👍 → training_sample 에 요약 질문·답변·영역·근거·추천 저장
+POST {{api}}/feedback
+Content-Type: application/json
+
+{
+  "answer_id": "{{answerId}}",
+  "rating": "up"
+}
+
+
+### 19. 👎 + 사유 (같은 답변이면 덮어씀)
+POST {{api}}/feedback
+Content-Type: application/json
+
+{
+  "answer_id": "{{answerId}}",
+  "rating": "down",
+  "reason_code": "UNCLEAR"
+}
+
+
+### 20. 👎 사유 없음 → 400 FEEDBACK_REASON_REQUIRED
+POST {{api}}/feedback
+Content-Type: application/json
+
+{
+  "answer_id": "{{answerId}}",
+  "rating": "down"
+}
+
+
+### ─────────────────── 폴백 케이스 ───────────────────
+
+### 21. 아이 설명 없이 "추천해줘"부터 → intent: "need_context"
+# @name fresh
+POST {{api}}/sessions
+Content-Type: application/json
+
+{}
+
+###
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{fresh.response.body.$.data.session_id}}",
+  "message": "근처 기관 추천해줘"
+}
+
+
+### 22. 진단 요구 → intent: "diagnosis", tier 3 고정 문구 (Gemini 호출 없음)
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "우리 아이 자폐인지 아닌지 진단해주세요"
+}
+
+
+### 23. 범위 밖 질문 → intent: "out_of_scope", evidence_count 0
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "오늘 저녁 메뉴 추천해줘"
+}
+
+
+### 24. 감각 쪽 질문 (다른 영역 뽑히는지)
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "{{sessionId}}",
+  "message": "옷 라벨이나 양말 솔기를 못 견디고 머리 감는 것도 심하게 싫어해요"
+}
+
+
+### 25. 없는 세션 → 404 SESSION_NOT_FOUND
+GET {{api}}/sessions/00000000-0000-0000-0000-000000000000
+
+
+### 26. 잘못된 사유 코드 → 400 INVALID_REASON_CODE (details.allowed)
+POST {{api}}/feedback
+Content-Type: application/json
+
+{
+  "answer_id": "{{answerId}}",
+  "rating": "down",
+  "reason_code": "WHATEVER"
+}
+
+
+### 26-1. 필드 형식 오류 → 400 VALIDATION_ERROR (details[].field)
+POST {{api}}/chat/ask
+Content-Type: application/json
+
+{
+  "session_id": "not-a-uuid"
+}
+
+
+### 26-2. 근거 없는 답변으로 추천 → 409 ANSWER_NOT_GROUNDED  (22번 진단 응답의 answer_id를 넣어보기)
+
+
+### 26-3. 질문 제한 — 같은 IP에서 시간당 60회 넘기면 429 RATE_LIMITED (ASK_RATE_LIMIT_PER_HOUR)
+
+
+### ─────────────────── 지식 검색 (디버그용) ───────────────────
+
+### 27. 벡터 검색 직접 (연령 필터 포함)
+POST {{api}}/knowledge/search
+Content-Type: application/json
+
+{
+  "query": "눈맞춤이 잘 안 돼요",
+  "age_months": 30,
+  "top_k": 5
+}
+
+
+### 28. 청크 하나 보기
+GET {{api}}/knowledge/chunks/ksied_w_7

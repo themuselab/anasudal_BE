@@ -1,0 +1,7 @@
+region         = "ap-northeast-2"
+gemini_api_key = "AQ.xxxxxxxx"            # 절대 커밋하지 말 것
+cors_origins   = "https://anasudal.example.com,http://localhost:5173"
+github_repo    = "your-org/anasudal"      # 비우면 OIDC 배포 역할 미생성
+
+# 심사 기간 후 좁히기
+gateway_ingress_cidrs = ["0.0.0.0/0"]
