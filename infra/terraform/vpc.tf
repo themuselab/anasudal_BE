@@ -1,4 +1,8 @@
-# ── VPC: 퍼블릭(게이트웨이·NAT) / 프라이빗(ECS·RDS), 2 AZ ─────────────────
+# ── VPC: 퍼블릭 서브넷만. NAT Gateway 없음 ─────────────────────────────────
+#
+# 모든 것이 게이트웨이 EC2 한 대 위에서 돈다(nginx·API·Postgres·Redis).
+# 그 인스턴스가 퍼블릭 서브넷에 있고 EIP 로 직접 나가므로 NAT(월 ~$43)가 필요 없다.
+# 서브넷을 2개 두는 것은 ECS 가 AZ 선택지를 갖게 하기 위한 것이고 추가 비용은 없다.
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -14,31 +18,10 @@ resource "aws_internet_gateway" "igw" {
 resource "aws_subnet" "public" {
   count                   = 2
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)         # 10.20.0.0/24, 10.20.1.0/24
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index) # 10.20.0.0/24, 10.20.1.0/24
   availability_zone       = local.azs[count.index]
   map_public_ip_on_launch = true
   tags                    = { Name = "${local.name}-public-${count.index}", Tier = "public" }
-}
-
-resource "aws_subnet" "private" {
-  count             = 2
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 10 + count.index)          # 10.20.10.0/24, 10.20.11.0/24
-  availability_zone = local.azs[count.index]
-  tags              = { Name = "${local.name}-private-${count.index}", Tier = "private" }
-}
-
-# ECS 태스크가 Gemini API·ECR로 나갈 출구. 단일 AZ NAT (비용 절감)
-resource "aws_eip" "nat" {
-  domain = "vpc"
-  tags   = { Name = "${local.name}-nat" }
-}
-
-resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
-  tags          = { Name = "${local.name}-nat" }
-  depends_on    = [aws_internet_gateway.igw]
 }
 
 resource "aws_route_table" "public" {
@@ -50,31 +33,19 @@ resource "aws_route_table" "public" {
   tags = { Name = "${local.name}-rt-public" }
 }
 
-resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.nat.id
-  }
-  tags = { Name = "${local.name}-rt-private" }
-}
-
 resource "aws_route_table_association" "public" {
   count          = 2
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_route_table_association" "private" {
-  count          = 2
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
-}
-
-# ── 보안 그룹: 게이트웨이 → ECS(8000) → RDS(5432). SSH 없음 ────────────────
+# ── 보안 그룹 ───────────────────────────────────────────────────────────────
+# 외부에 여는 것은 80/443 뿐이다. SSH(22) 없음 — 관리 접속은 SSM Session Manager.
+# Postgres(5432)·Redis(6379)·API(8000) 는 127.0.0.1 에만 바인딩되므로
+# 보안 그룹에 규칙이 없어도 인스턴스 내부에서만 닿는다.
 resource "aws_security_group" "gateway" {
   name        = "${local.name}-gateway"
-  description = "Public gateway: HTTP/HTTPS in, SSM only for admin"
+  description = "Public entry: HTTP/HTTPS only. Admin via SSM Session Manager."
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -92,47 +63,12 @@ resource "aws_security_group" "gateway" {
     cidr_blocks = var.gateway_ingress_cidrs
   }
   egress {
+    description = "ECR pull, Gemini API, SSM"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-}
 
-resource "aws_security_group" "api" {
-  name        = "${local.name}-api"
-  description = "ECS API tasks: 8000 from gateway only"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.gateway.id]
-  }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_security_group" "db" {
-  name        = "${local.name}-db"
-  description = "RDS: 5432 from API tasks and gateway (SSM port-forward)"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.api.id, aws_security_group.gateway.id]
-  }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  tags = { Name = "${local.name}-gateway" }
 }

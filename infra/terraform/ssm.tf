@@ -33,9 +33,8 @@ resource "aws_ssm_parameter" "top_k" {
   value = var.top_k
 }
 
-# 게이트웨이 EC2가 nginx 업스트림으로 쓸 내부 DNS 이름
-resource "aws_ssm_parameter" "api_internal_host" {
-  name  = "${local.ssm_prefix}/API_INTERNAL_HOST"
+resource "aws_ssm_parameter" "redis_url" {
+  name  = "${local.ssm_prefix}/REDIS_URL"
   type  = "String"
-  value = "${aws_service_discovery_service.api.name}.${aws_service_discovery_private_dns_namespace.ns.name}"
+  value = local.redis_url
 }

@@ -1,27 +1,21 @@
 variable "project" { default = "anasudal" }
-variable "env"     { default = "prod" }
-variable "region"  { default = "ap-northeast-2" }   # 서울
+variable "env" { default = "prod" }
+variable "region" { default = "ap-northeast-2" } # 서울
 
 variable "vpc_cidr" { default = "10.20.0.0/16" }
 
 # ── ECS
-variable "api_cpu"           { default = 512 }    # 0.5 vCPU
-variable "api_memory"        { default = 1024 }   # MiB
+variable "api_cpu" { default = 512 }    # 0.5 vCPU
+variable "api_memory" { default = 768 } # MiB
 variable "api_desired_count" { default = 1 }
-variable "api_image_tag"     { default = "latest" }   # CI가 새 리비전을 등록하므로 초기값만 의미 있음
+variable "api_image_tag" { default = "latest" } # CI가 새 리비전을 등록하므로 초기값만 의미 있음
 
-# ── RDS
-variable "db_instance_class"  { default = "db.t4g.micro" }
-variable "db_engine_version"  { default = "16.4" }        # pgvector 지원
-variable "db_allocated_gb"    { default = 20 }
-variable "db_name"            { default = "anasudal" }
-variable "db_username"        { default = "anasudal" }
-
-# ── Redis
-variable "redis_node_type" { default = "cache.t4g.micro" }
+# ── Postgres (게이트웨이 EC2 안 컨테이너)
+variable "db_name" { default = "anasudal" }
+variable "db_username" { default = "anasudal" }
 
 # ── Gateway EC2
-variable "gateway_instance_type" { default = "t4g.micro" }
+variable "gateway_instance_type" { default = "t3.small" }
 variable "gateway_ingress_cidrs" {
   description = "80/443 허용 대역. 해커톤 심사 기간엔 전체, 이후 좁힐 것"
   type        = list(string)
@@ -41,7 +35,7 @@ variable "gemini_summary_key" {
   sensitive = true
 }
 variable "cors_origins" { default = "http://localhost:5173" }
-variable "top_k"        { default = "3" }
+variable "top_k" { default = "3" }
 
 # ── CI (GitHub Actions OIDC). 비우면 IAM 역할을 만들지 않음
 variable "github_repo" {
@@ -53,4 +47,10 @@ variable "create_github_oidc" {
   description = "GitHub Actions OIDC 공급자를 직접 만든다. 계정에 이미 있으면 false"
   type        = bool
   default     = true
+}
+
+variable "data_volume_gb" {
+  description = "게이트웨이 루트 볼륨(GB). DB 데이터와 컨테이너 이미지가 여기 산다"
+  type        = number
+  default     = 30
 }

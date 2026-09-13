@@ -5,31 +5,26 @@ output "gateway_public_ip" {
 
 output "gateway_instance_id" {
   value       = aws_instance.gateway.id
-  description = "SSM Session Manager 대상"
+  description = "SSM Session Manager 대상. 셸·DB 터널 모두 이 인스턴스로."
 }
 
 output "ecr_repository_url" { value = aws_ecr_repository.api.repository_url }
-output "ecs_cluster"        { value = aws_ecs_cluster.main.name }
-output "ecs_service"        { value = aws_ecs_service.api.name }
-output "task_family"        { value = aws_ecs_task_definition.api.family }
+output "ecs_cluster" { value = aws_ecs_cluster.main.name }
+output "ecs_service" { value = aws_ecs_service.api.name }
+output "task_family" { value = aws_ecs_task_definition.api.family }
+output "region" { value = var.region }
 
-output "rds_endpoint" {
-  value       = aws_db_instance.db.address
-  description = "프라이빗. SSM 포트포워딩으로만 접근"
+output "ssm_database_url_param" {
+  value       = aws_ssm_parameter.database_url.name
+  description = "DB 접속 문자열이 든 SSM 파라미터 이름"
 }
 
-output "ssm_database_url_param" { value = aws_ssm_parameter.database_url.name }
-# SSM 파라미터의 .value 는 내용과 무관하게 민감값으로 취급된다.
-# 값 자체는 그냥 내부 DNS 이름이므로 원본에서 다시 만든다.
-output "api_internal_host" {
-  value       = "${aws_service_discovery_service.api.name}.${aws_service_discovery_private_dns_namespace.ns.name}"
-  description = "게이트웨이 nginx 가 바라보는 내부 DNS"
+output "ssm_db_password_param" {
+  value       = aws_ssm_parameter.db_password.name
+  description = "DB 비밀번호. 값 보기: aws ssm get-parameter --name <이 값> --with-decryption"
 }
 
 output "gha_deploy_role_arn" {
-  value = var.github_repo != "" ? aws_iam_role.gha_deploy[0].arn : null
+  value       = var.github_repo != "" ? aws_iam_role.gha_deploy[0].arn : null
+  description = "GitHub Secrets 의 AWS_DEPLOY_ROLE_ARN 에 넣을 값"
 }
-
-output "region" { value = var.region }
-
-output "redis_endpoint" { value = aws_elasticache_cluster.redis.cache_nodes[0].address }
