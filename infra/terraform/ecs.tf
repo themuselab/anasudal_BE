@@ -66,7 +66,8 @@ resource "aws_ecs_task_definition" "api" {
     ]
     secrets = [
       { name = "DATABASE_URL",   valueFrom = aws_ssm_parameter.database_url.arn },
-      { name = "GEMINI_API_KEY", valueFrom = aws_ssm_parameter.gemini_api_key.arn },
+      { name = "GEMINI_API_KEYS",    valueFrom = aws_ssm_parameter.gemini_api_keys.arn },
+      { name = "GEMINI_SUMMARY_KEY", valueFrom = aws_ssm_parameter.gemini_summary_key.arn },
       { name = "CORS_ORIGINS",   valueFrom = aws_ssm_parameter.cors_origins.arn },
       { name = "TOP_K",          valueFrom = aws_ssm_parameter.top_k.arn },
       { name = "REDIS_URL",      valueFrom = aws_ssm_parameter.redis_url.arn },

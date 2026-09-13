@@ -29,7 +29,14 @@ variable "gateway_ingress_cidrs" {
 }
 
 # ── 앱 설정 (SSM Parameter Store로 들어감)
-variable "gemini_api_key" {
+# 답변·임베딩용 키 (여러 개). 하나가 429 면 앱이 다음 키로 넘어간다
+variable "gemini_api_keys" {
+  type      = list(string)
+  sensitive = true
+}
+
+# 질문 요약(백그라운드로 DB 에 쌓음) 전용 키. 답변 쿼터와 분리한다
+variable "gemini_summary_key" {
   type      = string
   sensitive = true
 }

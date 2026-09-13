@@ -12,6 +12,7 @@ def to_evidence(r: asyncpg.Record) -> Evidence:
         chunk_id=r["chunk_id"], chunk_type=r["chunk_type"], content=r["content"],
         publisher=r["publisher"], source_title=r["source_title"],
         source_year=r["source_year"], source_url=r["source_url"],
+        domain=(r["domain"] if "domain" in r.keys() else None),
         similarity=round(sim, 4), match_percent=int(round(sim * 100)),
     )
 

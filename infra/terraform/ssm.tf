@@ -9,10 +9,16 @@ resource "aws_ssm_parameter" "database_url" {
   value = local.database_url
 }
 
-resource "aws_ssm_parameter" "gemini_api_key" {
-  name  = "${local.ssm_prefix}/GEMINI_API_KEY"
+resource "aws_ssm_parameter" "gemini_api_keys" {
+  name  = "${local.ssm_prefix}/GEMINI_API_KEYS"
   type  = "SecureString"
-  value = var.gemini_api_key
+  value = join(",", var.gemini_api_keys)
+}
+
+resource "aws_ssm_parameter" "gemini_summary_key" {
+  name  = "${local.ssm_prefix}/GEMINI_SUMMARY_KEY"
+  type  = "SecureString"
+  value = var.gemini_summary_key
 }
 
 resource "aws_ssm_parameter" "cors_origins" {

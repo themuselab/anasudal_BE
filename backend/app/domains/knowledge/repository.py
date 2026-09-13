@@ -10,6 +10,7 @@ async def vector_search(conn: asyncpg.Connection, qvec: list[float], *,
     return await conn.fetch(
         f"""
         SELECT {EVIDENCE_COLS},
+               c.domain,
                1 - (c.embedding <=> $1::vector) AS similarity
         FROM kb_chunk c
         JOIN mv_kb_evidence e ON e.chunk_id = c.chunk_id
@@ -34,3 +35,21 @@ async def get_evidence(conn: asyncpg.Connection, chunk_id: str) -> asyncpg.Recor
 async def area_names(conn: asyncpg.Connection) -> dict[str, str]:
     rows = await conn.fetch("SELECT area_code, name FROM therapy_area ORDER BY sort_order")
     return {r["area_code"]: r["name"] for r in rows}
+
+
+async def areas_for_domains(conn: asyncpg.Connection, domains: list[str]) -> list[asyncpg.Record]:
+    """K-DST 영역 이름 → 치료영역 코드 (area_mapping).
+    Gemini 키가 모두 한도에 걸렸을 때 LLM 없이 추천 영역을 뽑는 경로."""
+    if not domains:
+        return []
+    return await conn.fetch(
+        """
+        SELECT area_code, min(priority) AS priority
+        FROM area_mapping
+        WHERE kdst_domain = ANY($1::text[])
+        GROUP BY area_code
+        ORDER BY min(priority), area_code
+        LIMIT 3
+        """,
+        domains,
+    )

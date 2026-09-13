@@ -16,7 +16,7 @@ from app.core.config import get_settings
 from app.core.errors import ApiError, ErrorCode
 from app.core.db import connection
 from app.core.gemini import GeminiError, gemini, generate_json_stream
-from app.domains.chat import prompts, repository as repo
+from app.domains.chat import prompts, repository as repo, summarize
 from app.domains.chat.schemas import (AreaPriority, AskResponse, EvidenceListOut, RecommendedInstitution,
                                       RecommendResponse, SessionOut)
 from app.domains.institution import repository as inst_repo
@@ -69,12 +69,17 @@ class _Ctx:
     age: int | None
     evidence: list
     user_prompt: str
+    message: str            # 요약 작업에만 넘긴다. DB 에는 요약 결과만 남는다
 
 
 def _llm_error(e: GeminiError) -> ApiError:
+    if e.exhausted:
+        return ApiError(503, ErrorCode.LLM_RATE_LIMITED,
+                        "지금은 답변을 만들 수 없어요. 잠시 후 다시 시도해주세요",
+                        {"retry_after_sec": max(5, min(e.retry_after, 300))})
     if e.rate_limited:
         return ApiError(503, ErrorCode.LLM_RATE_LIMITED, "지금 질문이 몰려 있어요. 몇 초 뒤 다시 시도해주세요",
-                        {"retry_after_sec": 5})
+                        {"retry_after_sec": max(5, e.retry_after or 5)})
     return ApiError(502, ErrorCode.LLM_FAILED, "답변 생성에 실패했어요. 잠시 후 다시 시도해주세요", {"cause": str(e)[:300]})
 
 
@@ -114,8 +119,13 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
                            fallback_tier=0, can_recommend=True, ask_region=False, recommend_for=last["answer_id"],
                            text=f"{s['sido']} 기관을 찾아볼게요.", next_prompts=[]), None
 
-    evidence = await kb_service.retrieve(conn, message, age_months=age, top_k=cfg.top_k)
-    return None, _Ctx(s=s, names=names, age=age, evidence=evidence,
+    try:
+        evidence = await kb_service.retrieve(conn, message, age_months=age, top_k=cfg.top_k)
+    except GeminiError as e:
+        # 임베딩도 답변 키 풀을 쓴다. 키가 다 막히면 검색 자체가 안 되므로 여기서 끝낸다
+        # (같은 문장을 전에 물었다면 임베딩 캐시가 있어 여기까지 오지 않는다)
+        raise _llm_error(e)
+    return None, _Ctx(s=s, names=names, age=age, evidence=evidence, message=message,
                       user_prompt=prompts.build_user_prompt(message, age, evidence))
 
 
@@ -126,7 +136,6 @@ async def _finalize(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx, out: 
     areas = [a for a in out.get("areas", []) if a.get("area_code") in VALID_CODES]
     areas.sort(key=lambda a: a.get("priority", 3))
     keywords = [k.strip()[:20] for k in out.get("keywords", []) if k and k.strip()][:4]
-    summary = (out.get("question_summary") or "").strip()[:80] or None   # 원문 대신 저장하는 요약
 
     if not grounded:                       # tier 3-b: 범위 밖
         tier, text, areas, highlights = 3, prompts.TIER3_OUT_OF_SCOPE, [], []
@@ -138,8 +147,9 @@ async def _finalize(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx, out: 
             text += "\n\n이 영역을 다루는 기관을 추천해드릴까요?"
 
     aid = await repo.insert_answer(conn, session_id=session_id, areas=areas, keywords=keywords,
-                                   tier=tier, top_k=cfg.top_k, model=cfg.gemini_gen_model,
-                                   question_summary=summary)
+                                   tier=tier, top_k=cfg.top_k, model=cfg.gemini_gen_model)
+    # 질문 요약은 전용 키로 응답 뒤에 따로 만든다 (답변 쿼터·속도와 분리)
+    summarize.schedule(aid, ctx.message, age)
     if tier < 3:
         await repo.insert_evidence(conn, aid, [(e.chunk_id, i, e.similarity) for i, e in enumerate(evidence, 1)])
         # 답변 본문은 DB에 두지 않는다. 👍👎가 눌리면 학습 표본으로 옮길 수 있게 세션 TTL 동안만 Redis 보관
@@ -158,6 +168,41 @@ async def _finalize(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx, out: 
     )
 
 
+async def _degraded(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx) -> AskResponse:
+    """Gemini 키가 모두 한도에 걸렸을 때의 대체 답변.
+
+    문장은 못 쓰지만 검색은 됐으므로, 찾은 근거를 그대로 보여주고 치료영역은 근거 청크의
+    K-DST 영역 → area_mapping 으로 뽑는다. 추천까지는 이어갈 수 있다."""
+    cfg, names, ev = get_settings(), ctx.names, ctx.evidence
+    domains = [e.domain for e in ev if getattr(e, "domain", None)]
+    rows = await kb_repo.areas_for_domains(conn, sorted(set(domains)))
+    areas = [{"area_code": r["area_code"], "priority": int(r["priority"])} for r in rows]
+
+    lines = ["지금은 설명을 정리해드리지 못했어요. 대신 말씀해주신 내용과 가까운 자료를 찾았어요."]
+    for e in ev[:2]:
+        lines.append(f"· {e.publisher} 「{e.source_title}」 — {e.content[:120]}")
+    if areas:
+        names_txt = "·".join(f"**{names.get(a['area_code'], a['area_code'])}**" for a in areas)
+        lines.append(f"{names_txt} 영역을 확인해보시면 좋겠어요. 정확한 판단은 소아청소년과나 발달클리닉에서 받아보세요.")
+    text = "\n\n".join(lines)
+
+    aid = await repo.insert_answer(conn, session_id=session_id, areas=areas, keywords=["한도초과"],
+                                   tier=2, top_k=cfg.top_k, model="fallback")
+    await repo.insert_evidence(conn, aid, [(e.chunk_id, i, e.similarity) for i, e in enumerate(ev, 1)])
+    await cache.set_json(cache.key("conv", aid), {"answer": text, "age": ctx.age},
+                         cfg.session_ttl_hours * 3600)
+
+    return AskResponse(
+        answer_id=aid, intent="answer", text=text, highlights=[],
+        areas=[AreaPriority(area_code=a["area_code"], area_name=names.get(a["area_code"], a["area_code"]),
+                            priority=min(3, max(1, a["priority"]))) for a in areas],
+        evidence_count=len(ev), fallback_tier=2, can_recommend=bool(areas),
+        ask_region=(bool(areas) and ctx.s["region_id"] is None),
+        recommend_for=(aid if areas else None),
+        next_prompts=(["네, 추천해주세요"] if areas else ["더 물어볼게요"]),
+    )
+
+
 async def ask(conn: asyncpg.Connection, session_id: UUID, message: str) -> AskResponse:
     short, ctx = await _prepare(conn, session_id, message)
     if short is not None:
@@ -166,6 +211,8 @@ async def ask(conn: asyncpg.Connection, session_id: UUID, message: str) -> AskRe
     try:
         out = await gemini().generate_json(prompts.SYSTEM, ctx.user_prompt, schema=prompts.RESPONSE_SCHEMA)
     except GeminiError as e:
+        if e.exhausted and ctx.evidence:        # 키가 다 막혔어도 근거는 찾았으니 그대로 보여준다
+            return await _degraded(conn, session_id, ctx)
         raise _llm_error(e)
     return await _finalize(conn, session_id, ctx, out)
 
@@ -190,22 +237,23 @@ async def ask_stream(session_id: UUID, message: str):
 
         out: dict | None = None
         emitted = False
-        for attempt in range(2):                    # 429 는 아직 아무것도 못 보냈을 때만 4초 뒤 1회 재시도
-            try:
-                async for kind, val in generate_json_stream(prompts.SYSTEM, ctx.user_prompt, schema=prompts.RESPONSE_SCHEMA):
-                    if kind == "delta":
-                        emitted = True
-                        yield _sse("delta", {"text": val})
-                    else:
-                        out = val
-                break
-            except GeminiError as e:
-                if e.rate_limited and attempt == 0 and not emitted:
-                    await asyncio.sleep(4)
-                    continue
-                err = _llm_error(e)
-                yield _sse("error", {"code": err.code.value, "message": err.message, "details": err.details})
+        try:
+            # 키 교체는 gemini 쪽에서 처리한다 (첫 글자를 내보내기 전까지만)
+            async for kind, val in generate_json_stream(prompts.SYSTEM, ctx.user_prompt, schema=prompts.RESPONSE_SCHEMA):
+                if kind == "delta":
+                    emitted = True
+                    yield _sse("delta", {"text": val})
+                else:
+                    out = val
+        except GeminiError as e:
+            if e.exhausted and not emitted and ctx.evidence:
+                res = await _degraded(conn, session_id, ctx)
+                yield _sse("delta", {"text": res.text})
+                yield _sse("done", res.model_dump(mode="json"))
                 return
+            err = _llm_error(e)
+            yield _sse("error", {"code": err.code.value, "message": err.message, "details": err.details})
+            return
         if out is None:
             yield _sse("error", {"code": ErrorCode.LLM_FAILED.value, "message": "답변 생성에 실패했어요. 잠시 후 다시 시도해주세요"})
             return

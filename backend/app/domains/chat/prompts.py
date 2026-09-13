@@ -15,10 +15,9 @@ SYSTEM = """당신은 '안아수달'의 AI입니다. 발달이 걱정되는 부�
    근거와 이어지는 영역만 1~3개, 우선순위(1이 가장 높음)와 함께 냅니다.
 7. keywords에는 부모 문장의 핵심 주제를 명사 1~4개로 요약합니다(예: "언어지연", "소리 예민"). 원문을 옮기지 않습니다.
 8. answer 본문에서 부모가 말한 핵심 증상(예: 두 단어 문장, 호명 반응)과 확인해볼 영역 이름(예: 언어재활)은 마크다운 **굵게**로 3~6곳 표시합니다. 문장 전체를 굵히지 않습니다.
-9. question_summary에는 부모의 질문을 한 문장(40자 이내)으로 줄여 씁니다. 연령과 걱정되는 모습만 남기고 이름·지역·기관명 등 신원 정보는 뺍니다. 원문을 그대로 옮기지 않습니다.
 
 응답은 JSON 하나로만:
-{"grounded": true|false, "answer": "...", "areas": [{"area_code": "SPEECH", "priority": 1}], "keywords": ["..."], "question_summary": "..."}"""
+{"grounded": true|false, "answer": "...", "areas": [{"area_code": "SPEECH", "priority": 1}], "keywords": ["..."]}"""
 
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
@@ -37,10 +36,34 @@ RESPONSE_SCHEMA = {
             },
         },
         "keywords": {"type": "ARRAY", "items": {"type": "STRING"}},
-        "question_summary": {"type": "STRING"},
     },
-    "required": ["grounded", "answer", "areas", "keywords", "question_summary"],
+    "required": ["grounded", "answer", "areas", "keywords"],
 }
+
+
+# ── 질문 요약 (백그라운드·전용 키) ─────────────────────────────
+# 답변과 분리한 이유: ① 사용자가 기다리는 경로를 짧게 ② 답변 쿼터와 요약 쿼터를 나눠 쓰려고
+SUMMARY_SYSTEM = """부모가 쓴 아이 발달 상담 질문을 한 문장으로 줄이는 일만 합니다.
+
+규칙
+1. 40자 이내 한 문장. 존댓말 없이 명사형으로 끝냅니다. (예: "30개월, 두 단어 문장 못 하고 호명 반응 약함")
+2. 남길 것은 연령과 걱정되는 모습뿐입니다.
+3. 이름·지역·기관명·전화번호 등 사람이나 장소를 특정할 수 있는 정보는 모두 뺍니다.
+4. 원문을 그대로 옮기지 않고 줄여 씁니다. 없는 내용을 지어내지 않습니다.
+5. 진단명을 붙이지 않습니다.
+
+응답은 JSON 하나로만: {"summary": "..."}"""
+
+SUMMARY_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {"summary": {"type": "STRING"}},
+    "required": ["summary"],
+}
+
+
+def build_summary_prompt(message: str, age_months: int | None) -> str:
+    age = f"아이 월령: {age_months}개월\n" if age_months else ""
+    return f"{age}질문: {message[:1000]}"
 
 
 def build_user_prompt(message: str, age_months: int | None, evidence: list) -> str:

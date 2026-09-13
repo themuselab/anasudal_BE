@@ -1,5 +1,9 @@
 region         = "ap-northeast-2"
-gemini_api_key = "AQ.xxxxxxxx"            # 절대 커밋하지 말 것
+# 답변·임베딩용 (여러 개 — 하나가 한도에 걸리면 다음 키로 넘어간다)
+gemini_api_keys    = ["AQ.xxxxxxxx", "AQ.yyyyyyyy"]
+# 질문 요약 전용 (답변 쿼터와 분리)
+gemini_summary_key = "AQ.zzzzzzzz"
+# 위 값은 절대 커밋하지 말 것 (*.tfvars 는 .gitignore 에 있음)
 cors_origins   = "https://anasudal.example.com,http://localhost:5173"
 github_repo    = "your-org/anasudal"      # 비우면 OIDC 배포 역할 미생성
 

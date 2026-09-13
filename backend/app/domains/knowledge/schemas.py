@@ -10,6 +10,7 @@ class Evidence(BaseModel):
     source_title: str
     source_year: int | None
     source_url: str | None
+    domain: str | None = None   # K-DST 영역 (언어·인지·사회성 …) — 치료영역 매핑에 쓴다
     similarity: float
     match_percent: int          # 화면 표기 "82% 일치"
 

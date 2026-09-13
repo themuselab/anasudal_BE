@@ -18,7 +18,7 @@ FastAPI · PostgreSQL 16 + pgvector · Redis · Gemini · AWS(ECS/ECR + SSM 게�
 지켜야 할 선:
 
 - **진단하지 않습니다.** "○○ 의심" 같은 표현을 쓰지 않고 "확인해볼 영역"으로만 안내합니다. 진단을 요구하는 질문은 검색·생성 전에 규칙으로 막습니다.
-- **로그인이 없고 대화 원문을 저장하지 않습니다.** 답변 테이블에는 치료영역 코드·키워드·40자 요약만 남습니다.
+- **로그인이 없고 대화 원문을 저장하지 않습니다.** 답변 테이블에는 치료영역 코드·키워드와, 응답 뒤 따로 만든 40자 요약만 남습니다.
 - 근거가 없으면 지어내지 않고 범위 밖임을 알립니다.
 
 ---
@@ -35,7 +35,7 @@ psql "postgresql://anasudal:anasudal@localhost:5432/anasudal" -v csv_dir="$PWD/d
 
 # 3) API
 cd backend
-cp .env.example .env                        # GEMINI_API_KEY 채우기
+cp .env.example .env                        # GEMINI_API_KEYS · GEMINI_SUMMARY_KEY 채우기
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000   # http://localhost:8000/docs
 ```
@@ -86,7 +86,7 @@ event: error  data: {"code": "...", "message": "..."}
 | 404 | `SESSION_NOT_FOUND` · `ANSWER_NOT_FOUND` · `REGION_NOT_FOUND` · `INSTITUTION_NOT_FOUND` · `CHUNK_NOT_FOUND` · `NOT_FOUND` | |
 | 409 | `ANSWER_NOT_GROUNDED` · `ANSWER_SESSION_MISMATCH` | 근거 없는 답변으로 추천 요청 등 |
 | 429 | `RATE_LIMITED` | IP 당 시간당 질문 상한 |
-| 503 | `LLM_RATE_LIMITED` | Gemini 분당 한도 (4초 뒤 1회 재시도 후) |
+| 503 | `LLM_RATE_LIMITED` | Gemini 키가 모두 한도에 걸림 (`details.retry_after_sec`). 아래 "키 운영" 참고 |
 | 502 / 500 | `LLM_FAILED` / `INTERNAL_ERROR` | |
 
 ---
@@ -159,7 +159,7 @@ backend/          FastAPI — 도메인별 분리 (region · institution · know
 db/
   01_schema.sql   테이블 · 머티리얼라이즈드 뷰 4개 · 함수 · 시드
   02_load.sql     CSV → 스테이징 → 본 테이블
-  03~04_*.sql     이미 만든 DB 용 마이그레이션
+  03~05_*.sql     이미 만든 DB 용 마이그레이션
 infra/terraform/  VPC · RDS · ElastiCache · ECR · ECS(Fargate) · SSM 게이트웨이 EC2 · GitHub OIDC
 infra/scripts/    첫 이미지 푸시 · SSM 포트포워딩 · DB 초기화 · 게이트웨이 셸
 scripts/          데이터 파이프라인 · 평가 · 스모크 테스트
@@ -178,6 +178,40 @@ scripts/          데이터 파이프라인 · 평가 · 스모크 테스트
 
 ---
 
+## Gemini 키 운영 — 429 를 맞으면
+
+키를 두 묶음으로 나눠 씁니다.
+
+| 묶음 | 환경 변수 | 쓰는 곳 |
+|---|---|---|
+| 답변·임베딩 | `GEMINI_API_KEYS` (콤마로 여러 개) | 사용자가 기다리는 경로 — 질문 임베딩과 답변 생성 |
+| 요약 | `GEMINI_SUMMARY_KEY` | 응답을 보낸 뒤 백그라운드로 질문을 한 문장으로 줄여 DB 에 넣는 일 |
+
+요약을 분리한 이유는 두 가지입니다. 답변 속도에 영향을 주지 않고, 요약이 답변 쿼터를 갉아먹지 않습니다.
+요약이 실패해도 사용자에게는 아무 일도 일어나지 않습니다 — `answer.question_summary` 가 비어 있을 뿐입니다.
+
+### 한도에 걸리면 네 단계로 물러납니다
+
+1. **다른 키로 즉시 교체.** 429 를 맞은 키는 쉬게 하고 같은 요청을 다음 키로 보냅니다. 사용자는 아무것도 못 느낍니다.
+   쉬는 시간은 응답의 `RetryInfo.retryDelay` 를 따르고, 없으면 한도 종류로 정합니다 — 분당 한도 60초, 일일 한도 1시간(그 뒤 다시 찔러봄).
+   쉬는 상태는 **Redis 에 두어 ECS 태스크 여러 개가 같이 압니다.** 안 그러면 죽은 키를 인스턴스마다 다시 때립니다.
+2. **모든 키가 막혔지만 근거는 찾은 경우 → 대체 답변.** 문장은 못 쓰지만 검색은 됐으므로, 찾은 근거를 출처와 함께
+   그대로 보여주고 치료영역은 근거 청크의 K-DST 영역 → `area_mapping` 으로 뽑습니다. **기관 추천까지 이어집니다.**
+   `fallback_tier=2`, `model='fallback'` 로 남습니다.
+3. **검색조차 못 한 경우 → 503 `LLM_RATE_LIMITED`** (`details.retry_after_sec`). 임베딩도 답변 키를 쓰기 때문에
+   처음 보는 질문은 여기로 옵니다. 같은 문장을 전에 물었다면 임베딩 캐시(7일)가 있어 2번으로 갑니다.
+4. **요약 키가 막힌 경우 → 조용히 넘어갑니다.** 사용자와 무관하고, 나중에 채워 넣을 수 있습니다.
+
+`GET /health` 가 지금 어느 키가 쉬는 중인지 보여줍니다. 키 값은 해시 앞 8자만 나옵니다.
+
+```json
+{"ok": true, "redis": true,
+ "gemini": {"answer":  {"total": 2, "available": 1, "keys": [{"key":"ddc063f1","resting":true}, …]},
+            "summary": {"total": 1, "available": 1, "keys": […]}}}
+```
+
+---
+
 ## Redis
 
 없어도 API 는 그대로 돕니다(`REDIS_URL` 미설정 시 조용히 비활성).
@@ -189,6 +223,7 @@ scripts/          데이터 파이프라인 · 평가 · 스모크 테스트
 | 추천 칩 회전 카운터 | — |
 | IP 당 질문 상한 (기본 60회/시간) | 1시간 |
 | 답변 본문 임시 보관 (👍👎 누르면 학습 표본으로 이동) | 24시간 |
+| 한도에 걸린 Gemini 키 휴식 표시 (인스턴스 간 공유) | 60초~1시간 |
 
 ---
 
