@@ -108,7 +108,8 @@ infra/terraform/
   iam.tf        태스크실행/태스크/게이트웨이/GitHub OIDC 역할
   gateway.tf    EC2 + EIP + user-data(nginx)  outputs.tf    진입 IP·인스턴스 id·ECR URL
 infra/scripts/
-  login.sh       ★ 첫 실행 — 루트 로그인 → IAM 사용자 → 프로필 등록 → 루트 키 정리
+  login.ps1      ★ 첫 실행 (Windows PowerShell) — 로그인 → IAM 사용자 → 프로필 등록 → 루트 키 정리
+  login.sh       ★ 첫 실행 (Linux/macOS/CloudShell) — 위와 동일
   check-aws.sh   인증·권한·계정 현황 점검 (기존 프로젝트 리소스도 같이 보여준다)
   first-push.sh  첫 이미지 ECR 푸시 + 강제 재배포     db-tunnel.sh  localhost:15432 → RDS (SSM)
   db-init.sh     터널 통해 스키마·데이터 적재          shell.sh      게이트웨이 SSM 셸
@@ -121,6 +122,9 @@ infra/scripts/
 
 ```bash
 # 0. 로그인 + 전용 IAM 사용자 (1회, 이것만 하면 된다)
+#    Windows PowerShell:
+powershell -ExecutionPolicy Bypass -File .\infra\scripts\login.ps1
+#    Linux / macOS / CloudShell:
 bash infra/scripts/login.sh
 #    루트 액세스 키 두 줄만 입력하면 나머지는 자동:
 #    IAM 사용자 anasudal-deploy 생성 → 새 키를 anasudal 프로필에 등록
