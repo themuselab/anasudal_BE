@@ -33,6 +33,17 @@ _RECO = re.compile(
     r"(기관|센터|치료실|병원|곳|데)\s*(을|를|좀|도)?\s*(추천|찾아|알려|소개)"   # "기관 추천해줘", "센터 찾아줘"
     r"|^\s*((네|응|예|좋아요?|그래)[,.!\s]*)?(추천\s*)?(해\s*줘|해\s*주세요|부탁\s*(해요?|드려요?|합니다)?)?\s*[!.~]*$"   # "네, 추천해주세요" / "추천해줘" / "네"
 )
+# 가벼운 인사·서비스 문의 — 검색·생성 없이 무엇을 해주는 곳인지 알려준다
+_GREETING = re.compile(
+    r"^\s*(?:"
+    r"안녕(하세요|하십니까|히\s*계세요)?|하이|하잉|헬로|hello|hi|hey|ㅎㅇ|ㅎㅐㅇ|반가워(요)?|"
+    r"(넌|너|여긴|여기(는)?|이거|이곳(은)?)?\s*(뭐|무엇|누구|어떤\s*(서비스|곳|앱))(야|니|예요|에요|인가요|하는\s*(곳|거)(야|예요|에요)?)?|"
+    r"뭐\s*(하는|해주는)\s*(서비스|곳|거)(야|니|예요|에요|인가요)?|"
+    r"어떻게\s*(쓰는|사용하는)\s*거(야|예요|에요)?|"
+    r"뭘\s*(할\s*수\s*있|도와줄\s*수\s*있)(어|나요|어요)?"
+    r")\s*[?!.~]*\s*$",
+    re.IGNORECASE,
+)
 _AGE_Y = re.compile(r"(\d{1,2})\s*(살|세)")
 _AGE_M = re.compile(r"(\d{1,3})\s*개월")
 
@@ -93,6 +104,13 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
     cfg = get_settings()
     names = await kb_repo.area_names(conn)
     age = s["child_age_months"] or _age_from(message)
+
+    # 인사·서비스 문의: 검색도 생성도 하지 않고 무엇을 해주는 곳인지 소개한다
+    if _GREETING.match(message):
+        return AskResponse(answer_id=None, intent="need_context", text=prompts.GREETING, highlights=[],
+                           areas=[], evidence_count=0, fallback_tier=0, can_recommend=False,
+                           ask_region=False, recommend_for=None,
+                           next_prompts=["아이가 말이 느린 것 같아요", "또래와 어울리는 걸 어려워해요"]), None
 
     # tier 3-a: 진단 요구는 검색 전에 차단
     if _DIAG.search(message):
