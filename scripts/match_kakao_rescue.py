@@ -76,6 +76,16 @@ def meters(lat1, lon1, lat2, lon2) -> float:
     return math.hypot(dlat, dlon)
 
 
+def road_key(addr: str) -> str:
+    """'경기도 부천시 원미로 123, 2층' -> '원미로123'
+
+    같은 건물인지만 본다. 층·호수는 기관마다 다르니 뗀다.
+    """
+    head = (addr or "").split(",")[0]
+    m = re.search(r"([가-힣A-Za-z0-9]+(?:대?로|길))\s*(\d+(?:-\d+)?)", head)
+    return f"{m.group(1)}{m.group(2)}" if m else ""
+
+
 def sigungu_of(addr: str) -> str:
     """'경기도 성남시 분당구 ...' → '분당구' (없으면 '성남시')"""
     parts = (addr or "").split()
@@ -125,7 +135,12 @@ def judge(row: dict, doc: dict) -> tuple[str, float, float | None] | None:
     if a and b and (a == b or a in b or b in a) and len(min(a, b, key=len)) >= 3:
         return "NAME", s, dist()
 
-    # 3) 좌표가 가깝고 이름도 어느 정도 닮았다
+    # 3) 도로명 주소의 건물이 같고 이름도 어느 정도 닮았다
+    rk = road_key(row.get("address"))
+    if rk and rk == road_key(addr) and s >= 0.55:
+        return "ADDR", s, dist()
+
+    # 4) 좌표가 가깝고 이름도 어느 정도 닮았다
     d = dist()
     if d is not None and d <= 300 and s >= 0.55:
         return "NEAR", s, d
@@ -139,6 +154,9 @@ def best_match(client: httpx.Client, row: dict) -> dict | None:
     has_xy = bool(lat and lon)
 
     queries = []
+    # 전화번호로 바로 찾는다 — 이름이 아무리 달라도 번호가 같으면 같은 곳이다
+    if row.get("tel"):
+        queries.append((row["tel"], {}))
     if has_xy:
         queries.append((row["name"], {"x": lon, "y": lat, "radius": 700}))
         if core(row["name"]) != norm(row["name"]):
@@ -148,8 +166,11 @@ def best_match(client: httpx.Client, row: dict) -> dict | None:
     if gu:
         queries.append((f"{gu} {row['name']}", {}))
     queries.append((row["name"], {}))
+    # 주소로 그 건물의 업소를 훑는다 (도로명 주소가 있을 때만 뜻이 있다)
+    if road_key(row.get("address")):
+        queries.append((row["address"].split(",")[0], {}))
 
-    rank = {"TEL": 3, "NAME": 2, "NEAR": 1}
+    rank = {"TEL": 3, "NAME": 2, "ADDR": 2, "NEAR": 1}
     best = None
     for query, opts in queries:
         for doc in search(client, query, **opts):
@@ -162,7 +183,7 @@ def best_match(client: httpx.Client, row: dict) -> dict | None:
                 best = (key, why, doc, score, dist)
             if why == "TEL":                 # 전화 일치보다 확실한 건 없다
                 return {"why": why, "doc": doc, "sim": score, "dist": dist}
-        if best and best[1] == "NAME":       # 이름이 맞으면 더 볼 필요 없다
+        if best and best[1] in ("NAME", "ADDR"):   # 이름·건물이 맞으면 더 볼 필요 없다
             break
     return {"why": best[1], "doc": best[2], "sim": best[3], "dist": best[4]} if best else None
 
