@@ -6,6 +6,9 @@ gemini_summary_key = "AQ.zzzzzzzz"
 # 위 값은 절대 커밋하지 말 것 (*.tfvars 는 .gitignore 에 있음)
 cors_origins   = "https://anasudal.example.com,http://localhost:5173"
 github_repo    = "your-org/anasudal"      # 비우면 OIDC 배포 역할 미생성
+# OIDC 토큰의 불변 주체. 비우면 배포가 AssumeRoleWithWebIdentity 에서 막힌다.
+#   gh api repos/<org>/<repo>/actions/oidc/customization/sub → sub_claim_prefix 의 "repo:" 뒤 부분
+github_repo_immutable = "your-org@000000/anasudal@000000"
 
 # 심사 기간 후 좁히기
 gateway_ingress_cidrs = ["0.0.0.0/0"]

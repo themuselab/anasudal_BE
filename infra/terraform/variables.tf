@@ -43,6 +43,15 @@ variable "github_repo" {
   default     = ""
 }
 
+# GitHub 불변 주체(immutable subject) — 조직/저장소 ID 가 박힌 형태.
+# 요즘 저장소는 OIDC 토큰의 sub 가 "repo:<org>@<orgId>/<repo>@<repoId>:..." 로 나온다.
+# 값 확인:  gh api repos/<org>/<repo>/actions/oidc/customization/sub  → sub_claim_prefix
+# 비워두면 예전 형식만 허용한다 (그 경우 배포가 AssumeRoleWithWebIdentity 에서 막힌다).
+variable "github_repo_immutable" {
+  description = "예: themuselab@273790255/anasudal_BE@1367982784"
+  default     = ""
+}
+
 variable "create_github_oidc" {
   description = "GitHub Actions OIDC 공급자를 직접 만든다. 계정에 이미 있으면 false"
   type        = bool

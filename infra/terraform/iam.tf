@@ -122,7 +122,11 @@ data "aws_iam_policy_document" "gha_assume" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:*"]
+      # 불변 주체와 예전 형식을 모두 받는다 — 저장소 설정이 바뀌어도 배포가 안 끊기게
+      values = compact([
+        "repo:${var.github_repo}:*",
+        var.github_repo_immutable != "" ? "repo:${var.github_repo_immutable}:*" : "",
+      ])
     }
   }
 }
