@@ -18,6 +18,7 @@ class SessionOut(BaseModel):
     session_id: UUID
     region_id: int | None
     sido: str | None
+    sigungu: str | None = None
     child_age_months: int | None
     expires_at: str
 

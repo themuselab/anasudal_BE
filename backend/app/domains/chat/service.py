@@ -164,7 +164,7 @@ async def _finalize(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx, out: 
         fallback_tier=tier, can_recommend=(tier == 1),
         ask_region=(tier == 1 and s["region_id"] is None),
         recommend_for=(aid if tier == 1 else None),
-        next_prompts=(["네, 추천해주세요", "더 물어볼게요"] if tier == 1 else ["더 물어볼게요"]),
+        next_prompts=(["네, 추천해주세요"] if tier == 1 else []),
     )
 
 
@@ -199,7 +199,7 @@ async def _degraded(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx) -> As
         evidence_count=len(ev), fallback_tier=2, can_recommend=bool(areas),
         ask_region=(bool(areas) and ctx.s["region_id"] is None),
         recommend_for=(aid if areas else None),
-        next_prompts=(["네, 추천해주세요"] if areas else ["더 물어볼게요"]),
+        next_prompts=(["네, 추천해주세요"] if areas else []),
     )
 
 
@@ -318,24 +318,40 @@ async def recommend(conn: asyncpg.Connection, *, session_id: UUID, answer_id: UU
     names = await kb_repo.area_names(conn)
 
     # 지역은 추천 시점에 받는다: region_id(시·군·구) > sido(시·도) > 세션에 이미 있는 지역 > 전국
+    scope_region: int | None = None      # 시·군·구 id
+    scope_label = ""                     # 화면에 쓸 지역 이름
     if region_id is not None:
         picked = await repo.set_session_region(conn, session_id, region_id)
         if picked is None:
             raise ApiError(404, ErrorCode.REGION_NOT_FOUND, "지역을 찾을 수 없습니다")
-        scope = picked
+        scope = picked["sido"]
+        scope_region = region_id
+        scope_label = f"{picked['sido']} {picked['sigungu']}"
     elif sido:
         scope = sido
+        scope_label = sido
         if s["region_id"] is None:
             await repo.set_session_sido(conn, session_id, sido)
     else:
         scope = s["sido"]
+        scope_region = s["region_id"]
+        scope_label = f"{s['sido']} {s['sigungu']}" if s["sigungu"] else (s["sido"] or "")
 
-    # 전 영역 조합 → 상위 2개 → 1순위 순으로 완화하며 3곳 확보
-    rows: list = []
-    for k in range(len(want), 0, -1):
-        rows = await inst_repo.recommend(conn, area_codes=want[:k], sido=scope, max_price=max_price, limit=3)
-        if len(rows) >= 3 or k == 1:
-            break
+    # 전 영역 조합 → 상위 2개 → 1순위 순으로 완화하며 3곳 확보 (고른 구 안에서)
+    async def pick(region: int | None) -> list:
+        found: list = []
+        for k in range(len(want), 0, -1):
+            found = await inst_repo.recommend(conn, area_codes=want[:k], region_id=region,
+                                              sido=scope, max_price=max_price, limit=3)
+            if len(found) >= 3 or k == 1:
+                break
+        return found
+
+    rows = await pick(scope_region)
+    widened = False
+    if not rows and scope_region is not None:   # 고른 구에 한 곳도 없으면 시·도로 넓히고 그렇게 말한다
+        rows = await pick(None)
+        widened = bool(rows)
 
     items: list[RecommendedInstitution] = []
     for rank, r in enumerate(rows, 1):
@@ -344,9 +360,14 @@ async def recommend(conn: asyncpg.Connection, *, session_id: UUID, answer_id: UU
     await repo.insert_recommendations(conn, answer_id, [(i.biz_no, i.rank, i.reason) for i in items])
 
     want_names = "·".join(names.get(c, c) for c in want[:2])
-    where = f"{scope} " if scope else "전국 "
-    intro = (f"{where}기관 중 {want_names}을(를) 함께 볼 수 있는 곳 {len(items)}곳을 찾았어요."
-             if items else f"{where}기관 중 조건에 맞는 곳을 찾지 못했어요.")
+    where = scope_label or scope or "전국"
+    if not items:
+        intro = f"{where} 기관 중 조건에 맞는 곳을 찾지 못했어요."
+    elif widened:
+        intro = (f"{where}에는 조건에 맞는 곳이 없어 {scope} 전체에서 "
+                 f"{want_names}을(를) 함께 볼 수 있는 곳 {len(items)}곳을 찾았어요.")
+    else:
+        intro = f"{where} 기관 중 {want_names}을(를) 함께 볼 수 있는 곳 {len(items)}곳을 찾았어요."
     return RecommendResponse(
         answer_id=answer_id, intro=intro, items=items, scope_sido=scope,
         browse_hint="다른 지역이나 더 많은 기관은 둘러보기에서 지역을 바꿔 확인할 수 있어요.",

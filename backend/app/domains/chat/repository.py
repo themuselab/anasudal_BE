@@ -20,7 +20,7 @@ async def create_session(conn: asyncpg.Connection, region_id: int | None,
 async def get_session(conn: asyncpg.Connection, session_id: UUID) -> asyncpg.Record | None:
     return await conn.fetchrow(
         """
-        SELECT s.session_id, s.region_id, r.sido, s.child_age_months,
+        SELECT s.session_id, s.region_id, r.sido, r.sigungu, s.child_age_months,
                to_char(s.expires_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS expires_at
         FROM session s LEFT JOIN region r ON r.region_id = s.region_id
         WHERE s.session_id = $1 AND s.expires_at > now()
@@ -42,13 +42,13 @@ async def patch_session(conn: asyncpg.Connection, session_id: UUID,
     )
 
 
-async def set_session_region(conn: asyncpg.Connection, session_id: UUID, region_id: int) -> str | None:
-    """추천 시점에 고른 지역을 세션에 저장(덮어씀). 해당 시·도명을 돌려준다."""
-    return await conn.fetchval(
+async def set_session_region(conn: asyncpg.Connection, session_id: UUID, region_id: int) -> asyncpg.Record | None:
+    """추천 시점에 고른 지역을 세션에 저장(덮어씀). 시·도와 시·군·구를 돌려준다."""
+    return await conn.fetchrow(
         """
-        WITH r AS (SELECT region_id, sido FROM region WHERE region_id = $2)
+        WITH r AS (SELECT region_id, sido, sigungu FROM region WHERE region_id = $2)
         UPDATE session s SET region_id = r.region_id FROM r WHERE s.session_id = $1
-        RETURNING r.sido
+        RETURNING r.sido, r.sigungu
         """,
         session_id, region_id,
     )

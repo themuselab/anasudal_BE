@@ -80,20 +80,23 @@ async def get_prices(conn: asyncpg.Connection, biz_no: str) -> list[asyncpg.Reco
     )
 
 
-async def recommend(conn: asyncpg.Connection, *, area_codes: list[str], sido: str | None,
-                    max_price: int | None, limit: int = 3) -> list[asyncpg.Record]:
+async def recommend(conn: asyncpg.Connection, *, area_codes: list[str], region_id: int | None,
+                    sido: str | None, max_price: int | None, limit: int = 3) -> list[asyncpg.Record]:
     """추천: 요구 영역과 겹치는 수(정확도) → 전 영역 포함 여부 → 단가 → 이름 순.
-    회의 결정대로 점수는 화면에 내보내지 않고 순서로만 쓴다."""
+    회의 결정대로 점수는 화면에 내보내지 않고 순서로만 쓴다.
+
+    지역은 고른 만큼 좁힌다 — region_id(시·군·구)가 있으면 그 구까지, 없으면 시·도까지."""
     return await conn.fetch(
         f"""
         SELECT {CARD_COLS},
                cardinality(ARRAY(SELECT unnest(area_codes::text[]) INTERSECT SELECT unnest($1::text[]))) AS matched
         FROM mv_institution_card
         WHERE area_codes::text[] && $1::text[]
-          AND ($2::text IS NULL OR sido = $2)
-          AND ($3::int  IS NULL OR price_min <= $3)
+          AND ($2::int  IS NULL OR region_id = $2)
+          AND ($3::text IS NULL OR sido = $3)
+          AND ($4::int  IS NULL OR price_min <= $4)
         ORDER BY matched DESC, (area_codes::text[] @> $1::text[]) DESC, price_min ASC NULLS LAST, name COLLATE "C"
-        LIMIT $4
+        LIMIT $5
         """,
-        area_codes, sido, max_price, limit,
+        area_codes, region_id, sido, max_price, limit,
     )
