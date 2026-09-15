@@ -75,5 +75,5 @@ async def evidence(answer_id: UUID, conn: asyncpg.Connection = Depends(get_conn)
 @router.post("/chat/recommend", response_model=RecommendResponse, summary="'네, 추천해주세요' → 기관 3곳")
 async def recommend(body: RecommendRequest, conn: asyncpg.Connection = Depends(get_conn)):
     return await service.recommend(conn, session_id=body.session_id, answer_id=body.answer_id,
-                                   region_id=body.region_id,
+                                   area_codes=body.area_codes, region_id=body.region_id,
                                    sido=body.sido, max_price=body.max_price)

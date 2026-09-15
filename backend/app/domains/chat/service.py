@@ -399,22 +399,32 @@ def _reason(card, want: list[str], names: dict[str, str]) -> str:
     return head + tail + visit
 
 
-async def recommend(conn: asyncpg.Connection, *, session_id: UUID, answer_id: UUID,
-                    region_id: int | None, sido: str | None, max_price: int | None) -> RecommendResponse:
+async def recommend(conn: asyncpg.Connection, *, session_id: UUID, answer_id: UUID | None,
+                    area_codes: list[str], region_id: int | None, sido: str | None,
+                    max_price: int | None) -> RecommendResponse:
     s = await repo.get_session(conn, session_id)
-    a = await repo.get_answer(conn, answer_id)
     if s is None:
         raise ApiError(404, ErrorCode.SESSION_NOT_FOUND, "세션이 없거나 만료되었습니다")
-    if a is None:
-        raise ApiError(404, ErrorCode.ANSWER_NOT_FOUND, "답변을 찾을 수 없습니다")
-    if a["session_id"] != session_id:
-        raise ApiError(409, ErrorCode.ANSWER_SESSION_MISMATCH, "이 세션의 답변이 아닙니다")
-    if a["fallback_tier"] != 1:
-        raise ApiError(409, ErrorCode.ANSWER_NOT_GROUNDED, "근거가 확보된 답변에서만 추천할 수 있습니다")
 
-    import json
-    areas = json.loads(a["extracted_areas"]) if isinstance(a["extracted_areas"], str) else a["extracted_areas"]
-    want = [x["area_code"] for x in sorted(areas, key=lambda x: x.get("priority", 3))]
+    if answer_id is not None:
+        # 대화에서 온 추천 — 그 답변이 뽑은 치료영역을 쓴다
+        a = await repo.get_answer(conn, answer_id)
+        if a is None:
+            raise ApiError(404, ErrorCode.ANSWER_NOT_FOUND, "답변을 찾을 수 없습니다")
+        if a["session_id"] != session_id:
+            raise ApiError(409, ErrorCode.ANSWER_SESSION_MISMATCH, "이 세션의 답변이 아닙니다")
+        if a["fallback_tier"] != 1:
+            raise ApiError(409, ErrorCode.ANSWER_NOT_GROUNDED, "근거가 확보된 답변에서만 추천할 수 있습니다")
+        import json
+        areas = json.loads(a["extracted_areas"]) if isinstance(a["extracted_areas"], str) else a["extracted_areas"]
+        want = [x["area_code"] for x in sorted(areas, key=lambda x: x.get("priority", 3))]
+    else:
+        # 관찰 기록에서 온 추천 — 반응이 약했던 과제의 영역을 그대로 쓴다
+        want = [c for c in area_codes if c in VALID_CODES]
+        if not want:
+            raise ApiError(400, ErrorCode.VALIDATION_ERROR,
+                           "추천에 쓸 답변이나 치료영역이 필요합니다",
+                           {"area_codes": area_codes})
     names = await kb_repo.area_names(conn)
 
     # 지역은 추천 시점에 받는다: region_id(시·군·구) > sido(시·도) > 세션에 이미 있는 지역 > 전국
@@ -457,7 +467,8 @@ async def recommend(conn: asyncpg.Connection, *, session_id: UUID, answer_id: UU
     for rank, r in enumerate(rows, 1):
         card = to_card(r)
         items.append(RecommendedInstitution(**card.model_dump(), rank=rank, reason=_reason(card, want, names)))
-    await repo.insert_recommendations(conn, answer_id, [(i.biz_no, i.rank, i.reason) for i in items])
+    if answer_id is not None:      # 관찰에서 온 추천은 붙일 답변이 없다
+        await repo.insert_recommendations(conn, answer_id, [(i.biz_no, i.rank, i.reason) for i in items])
 
     want_names = "·".join(names.get(c, c) for c in want[:2])
     where = scope_label or scope or "전국"

@@ -69,7 +69,9 @@ class EvidenceListOut(BaseModel):
 # ── 추천 ──
 class RecommendRequest(BaseModel):
     session_id: UUID
-    answer_id: UUID
+    # 둘 중 하나는 있어야 한다. 답변에서 오면 answer_id, 관찰 기록에서 오면 area_codes.
+    answer_id: UUID | None = None
+    area_codes: list[str] = []
     region_id: int | None = None         # 지역 선택 UI 응답(시·군·구). 세션에 저장되고 그 시·도로 추천
     sido: str | None = None              # 시·도만 고른 경우. region_id가 있으면 무시
     max_price: int | None = Field(None, ge=0)
@@ -81,7 +83,7 @@ class RecommendedInstitution(InstitutionCard):
 
 
 class RecommendResponse(BaseModel):
-    answer_id: UUID
+    answer_id: UUID | None
     intro: str                           # "언어치료·감각통합을 함께 볼 수 있는 기관 2곳을 찾았어요"
     items: list[RecommendedInstitution]
     scope_sido: str | None
