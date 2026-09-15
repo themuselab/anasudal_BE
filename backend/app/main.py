@@ -14,6 +14,7 @@ from app.domains.feedback.router import router as feedback_router
 from app.domains.institution.router import router as institution_router
 from app.domains.knowledge.router import router as knowledge_router
 from app.domains.region.router import router as region_router
+from app.domains.screening.router import router as screening_router
 
 
 @asynccontextmanager
@@ -42,7 +43,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (region_router, institution_router, knowledge_router, chat_router, feedback_router):
+for r in (region_router, institution_router, knowledge_router, chat_router, feedback_router,
+          screening_router):
     app.include_router(r, prefix="/v1")
 
 
