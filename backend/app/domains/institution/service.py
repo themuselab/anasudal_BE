@@ -26,8 +26,8 @@ async def detail(conn, biz_no: str) -> InstitutionDetail:
     card = to_card(r)
     year = prices[0].price_year if prices else card.price_year
     return InstitutionDetail(
-        **card.model_dump(),
-        address=r["address"], tel=r["tel"],
+        **card.model_dump(),            # tel 은 카드가 들고 있다 — 여기서 또 주면 중복 인자로 터진다
+        address=r["address"],
         lat=float(r["lat"]) if r["lat"] is not None else None,
         lon=float(r["lon"]) if r["lon"] is not None else None,
         operating_hours=r["operating_hours"],
