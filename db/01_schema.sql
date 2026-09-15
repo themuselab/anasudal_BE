@@ -95,9 +95,12 @@ CREATE TABLE kb_chunk (
 CREATE INDEX kb_chunk_type_idx ON kb_chunk(chunk_type);
 CREATE INDEX kb_chunk_age_idx  ON kb_chunk(age_lo, age_hi) WHERE age_lo IS NOT NULL;
 CREATE INDEX kb_chunk_meta_idx ON kb_chunk USING gin (meta);
--- 벡터 검색: HNSW + 코사인. 1,473행이라 ef_construction 기본값으로 충분
-CREATE INDEX kb_chunk_embedding_idx ON kb_chunk
-  USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+-- 벡터 검색: 인덱스를 두지 않는다 (전수 탐색).
+--   HNSW 를 달았더니 기본 ef_search(40)에서 엉뚱한 이웃을 돌려줬다 — "감각발달재활이
+--   뭐예요?"에 정답(0.79)을 놓치고 무관한 경고신호(0.67)를 1위로 냈다. ef_search 를
+--   올리면 정확해지지만 5.98ms 가 들고, 전수 탐색은 5.97ms 다. 1,473행에서는 인덱스가
+--   이득 없이 정확도만 깎는다. 월령 필터와 겹치면 후보가 하나도 안 남을 수도 있다.
+--   자세한 근거는 db/07_exact_knn.sql 과 backend/docs/rag-tuning.md.
 COMMENT ON TABLE kb_chunk IS '검색 단위 카드 1,473장. 원본 필드는 age_lo/age_hi/domain/meta로 보존';
 
 CREATE TABLE area_mapping (
