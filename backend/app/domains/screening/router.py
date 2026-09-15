@@ -4,10 +4,11 @@ import asyncpg
 from fastapi import APIRouter, Depends, Query, Response
 
 from app.core.db import get_conn
+from app.core.envelope import EnvelopeRoute
 from app.domains.screening import service
 from app.domains.screening.schemas import ResultIn, ResultOut, TaskSet
 
-router = APIRouter(prefix="/screening", tags=["screening"])
+router = APIRouter(route_class=EnvelopeRoute, prefix="/screening", tags=["screening"])
 
 
 @router.get("/tasks", response_model=TaskSet, summary="연령에 맞는 관찰 과제")
