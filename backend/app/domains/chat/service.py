@@ -131,7 +131,7 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
         return AskResponse(answer_id=None, intent="need_context", text=prompts.GREETING, highlights=[],
                            areas=[], evidence_count=0, fallback_tier=0, can_recommend=False,
                            ask_region=False, recommend_for=None,
-                           next_prompts=["아이가 말이 느린 것 같아요", "또래와 어울리는 걸 어려워해요"]), None
+                           next_prompts=prompts.STARTERS), None
 
     # tier 3-a: 진단 요구는 검색 전에 차단
     if _DIAG.search(message):
@@ -140,7 +140,7 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
         return AskResponse(answer_id=aid, intent="diagnosis", text=prompts.TIER3_DIAGNOSIS, highlights=[],
                            areas=[], evidence_count=0, fallback_tier=3, can_recommend=False,
                            ask_region=False, recommend_for=None,
-                           next_prompts=["아이가 말이 느린 것 같아요", "또래와 어울리는 걸 어려워해요"]), None
+                           next_prompts=prompts.STARTERS), None
 
     # 문장에 지역이 적혀 있으면 지금 잡아둔다 — 나중에 또 묻지 않으려고.
     # ("분당 근처 언어치료 기관 추천해주세요" 에 대고 시·도부터 고르라고 하면 안 된다)
@@ -161,7 +161,7 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
             return AskResponse(answer_id=None, intent="need_context", highlights=[], areas=[], evidence_count=0,
                                fallback_tier=0, can_recommend=False, ask_region=False, recommend_for=None,
                                text="먼저 아이의 걱정되는 모습을 알려주시면, 맞는 치료영역을 찾은 뒤 기관을 추천해드릴게요.",
-                               next_prompts=["아이가 말이 느린 것 같아요", "이름을 불러도 잘 쳐다보지 않아요"]), None
+                               next_prompts=prompts.STARTERS_ALT), None
         if last is not None:
             if region_id is None:
                 return AskResponse(answer_id=None, intent="pick_region", highlights=[], areas=[], evidence_count=0,
@@ -219,7 +219,10 @@ async def _finalize(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx, out: 
         fallback_tier=tier, can_recommend=(tier == 1),
         ask_region=(tier == 1 and s["region_id"] is None),
         recommend_for=(aid if tier == 1 else None),
-        next_prompts=(["네, 추천해주세요"] if tier == 1 else []),
+        # tier 1 은 치료영역이 잡혔으니 기관 추천으로, 그 밖에는 상담을 시작할 문장을 준다.
+        # 절차·제도 질문(tier 2)은 답을 듣고 나면 "그래서 우리 애는?" 이 남는데
+        # 아무것도 안 주면 대화가 거기서 끊긴다.
+        next_prompts=(["네, 추천해주세요"] if tier == 1 else prompts.STARTERS),
     )
 
 
@@ -254,7 +257,7 @@ async def _degraded(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx) -> As
         evidence_count=len(ev), fallback_tier=2, can_recommend=bool(areas),
         ask_region=(bool(areas) and ctx.s["region_id"] is None),
         recommend_for=(aid if areas else None),
-        next_prompts=(["네, 추천해주세요"] if areas else []),
+        next_prompts=(["네, 추천해주세요"] if areas else prompts.STARTERS),
     )
 
 
