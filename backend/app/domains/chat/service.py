@@ -144,6 +144,10 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
     cfg = get_settings()
     names = await kb_repo.area_names(conn)
     age = s["child_age_months"] or _age_from(message)
+    # 문장에서 찾은 월령은 세션에 남긴다. 안 남기면 다음 메시지부터 나이를 잊어버려서
+    # 검색의 연령 필터가 안 먹고, "같이 살펴볼까요?" 칩을 눌러도 월령이 없어 되돌아간다.
+    if age is not None and s["child_age_months"] is None:
+        await repo.patch_session(conn, session_id, region_id=None, age=age)
 
     # 인사·서비스 문의: 검색도 생성도 하지 않고 무엇을 해주는 곳인지 소개한다
     if _GREETING.match(message):
