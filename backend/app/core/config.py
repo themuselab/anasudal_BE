@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     cache_ttl_embed: int = 7 * 24 * 3600  # 질문 임베딩 캐시
     ask_rate_limit_per_hour: int = 60     # IP당 /chat/ask 상한 (로그인 없음 → Gemini 남용 방지; 심사장 공용 IP 감안)
     prompt_count: int = 3                 # 첫 화면 칩 개수
+    followup_count: int = 2               # 답변 뒤 칩 개수
 
     @property
     def answer_keys(self) -> list[str]:

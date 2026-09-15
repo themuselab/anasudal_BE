@@ -135,7 +135,9 @@ async def insert_recommendations(conn: asyncpg.Connection, answer_id: UUID,
         )
 
 
-async def list_prompts(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+async def list_prompts(conn: asyncpg.Connection, slot: str = "home") -> list[asyncpg.Record]:
     return await conn.fetch(
-        "SELECT prompt_id, text, emoji FROM suggested_prompt WHERE active ORDER BY sort_order, prompt_id"
+        "SELECT prompt_id, text, emoji FROM suggested_prompt "
+        "WHERE active AND slot = $1 ORDER BY sort_order, prompt_id",
+        slot,
     )

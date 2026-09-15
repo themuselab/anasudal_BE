@@ -4,6 +4,7 @@
 """
 import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 from uuid import UUID
@@ -23,6 +24,8 @@ from app.domains.institution import repository as inst_repo
 from app.domains.institution.service import to_card
 from app.domains.knowledge import repository as kb_repo, service as kb_service
 from app.domains.knowledge.service import to_evidence
+
+log = logging.getLogger("anasudal.chat")
 
 VALID_CODES = {"SPEECH", "AUDIT", "ART", "MUSIC", "PLAY", "BEHAV", "PSYCH", "SENSORY", "MOTOR", "PSYMOTOR"}
 
@@ -131,7 +134,7 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
         return AskResponse(answer_id=None, intent="need_context", text=prompts.GREETING, highlights=[],
                            areas=[], evidence_count=0, fallback_tier=0, can_recommend=False,
                            ask_region=False, recommend_for=None,
-                           next_prompts=prompts.STARTERS), None
+                           next_prompts=await followup_prompts(conn)), None
 
     # tier 3-a: 진단 요구는 검색 전에 차단
     if _DIAG.search(message):
@@ -140,7 +143,7 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
         return AskResponse(answer_id=aid, intent="diagnosis", text=prompts.TIER3_DIAGNOSIS, highlights=[],
                            areas=[], evidence_count=0, fallback_tier=3, can_recommend=False,
                            ask_region=False, recommend_for=None,
-                           next_prompts=prompts.STARTERS), None
+                           next_prompts=await followup_prompts(conn)), None
 
     # 문장에 지역이 적혀 있으면 지금 잡아둔다 — 나중에 또 묻지 않으려고.
     # ("분당 근처 언어치료 기관 추천해주세요" 에 대고 시·도부터 고르라고 하면 안 된다)
@@ -161,7 +164,7 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
             return AskResponse(answer_id=None, intent="need_context", highlights=[], areas=[], evidence_count=0,
                                fallback_tier=0, can_recommend=False, ask_region=False, recommend_for=None,
                                text="먼저 아이의 걱정되는 모습을 알려주시면, 맞는 치료영역을 찾은 뒤 기관을 추천해드릴게요.",
-                               next_prompts=prompts.STARTERS_ALT), None
+                               next_prompts=await followup_prompts(conn)), None
         if last is not None:
             if region_id is None:
                 return AskResponse(answer_id=None, intent="pick_region", highlights=[], areas=[], evidence_count=0,
@@ -222,7 +225,8 @@ async def _finalize(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx, out: 
         # tier 1 은 치료영역이 잡혔으니 기관 추천으로, 그 밖에는 상담을 시작할 문장을 준다.
         # 절차·제도 질문(tier 2)은 답을 듣고 나면 "그래서 우리 애는?" 이 남는데
         # 아무것도 안 주면 대화가 거기서 끊긴다.
-        next_prompts=(["네, 추천해주세요"] if tier == 1 else prompts.STARTERS),
+        # "네, 추천해주세요" 만 코드에 둔다 — 문구가 아니라 동작이라 _RECO 정규식과 짝이다.
+        next_prompts=(["네, 추천해주세요"] if tier == 1 else await followup_prompts(conn)),
     )
 
 
@@ -257,7 +261,7 @@ async def _degraded(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx) -> As
         evidence_count=len(ev), fallback_tier=2, can_recommend=bool(areas),
         ask_region=(bool(areas) and ctx.s["region_id"] is None),
         recommend_for=(aid if areas else None),
-        next_prompts=(["네, 추천해주세요"] if areas else prompts.STARTERS),
+        next_prompts=(["네, 추천해주세요"] if areas else await followup_prompts(conn)),
     )
 
 
@@ -434,20 +438,36 @@ async def recommend(conn: asyncpg.Connection, *, session_id: UUID, answer_id: UU
 
 # ── 추천 칩 회전 ───────────────────────────────────────────
 async def rotating_prompts(conn: asyncpg.Connection) -> list[dict]:
-    """활성 칩 전체(10분 캐시)에서 호출마다 다른 N개.
-    Redis 있으면 라운드로빈(연속 호출이 항상 다른 묶음) · 없으면 무작위."""
+    """첫 화면 칩. 활성 칩 전체(10분 캐시)에서 호출마다 다른 N개."""
+    return await _rotate(conn, "home", get_settings().prompt_count)
+
+
+async def followup_prompts(conn: asyncpg.Connection) -> list[str]:
+    """답변 뒤에 붙는 칩. 문구를 코드가 아니라 suggested_prompt 표가 들고 있다.
+
+    표가 비었거나 DB 가 흔들려도 대화가 막다른 길이 되면 안 되므로 코드 기본값으로 떨어진다.
+    """
+    try:
+        rows = await _rotate(conn, "followup", get_settings().followup_count)
+    except Exception:                       # 칩 때문에 답변을 실패시키지는 않는다
+        log.warning("후속 칩 조회 실패 — 기본값 사용", exc_info=True)
+        rows = []
+    return [r["text"] for r in rows] or list(prompts.STARTERS)
+
+
+async def _rotate(conn: asyncpg.Connection, slot: str, n_take: int) -> list[dict]:
+    """Redis 있으면 라운드로빈(연속 호출이 항상 다른 묶음) · 없으면 무작위."""
     import random
-    n_take = get_settings().prompt_count
-    allp = await cache.cached(cache.key("prompts", "all", "v2"), get_settings().cache_ttl_read,
-                              lambda: _fetch_prompts(conn))
+    allp = await cache.cached(cache.key("prompts", slot, "v3"), get_settings().cache_ttl_read,
+                              lambda: _fetch_prompts(conn, slot))
     if len(allp) <= n_take:
         return allp
-    off = await cache.next_offset(cache.key("prompts", "rr"))
+    off = await cache.next_offset(cache.key("prompts", "rr", slot))
     if off is None:
         return random.sample(allp, n_take)
     start = (off * n_take) % len(allp)
     return [allp[(start + i) % len(allp)] for i in range(n_take)]
 
 
-async def _fetch_prompts(conn: asyncpg.Connection) -> list[dict]:
-    return [dict(r) for r in await repo.list_prompts(conn)]
+async def _fetch_prompts(conn: asyncpg.Connection, slot: str) -> list[dict]:
+    return [dict(r) for r in await repo.list_prompts(conn, slot)]
