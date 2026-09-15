@@ -37,8 +37,12 @@ _RECO = re.compile(
     r"|^\s*((네|응|예|좋아요?|그래)[,.!\s]*)?(추천\s*)?(해\s*줘|해\s*주세요|부탁\s*(해요?|드려요?|합니다)?)?\s*[!.~]*$"   # "네, 추천해주세요" / "추천해줘" / "네"
 )
 # "같이 살펴볼까요?" 칩. 문구가 아니라 동작이라 코드에 둔다 (_RECO 와 같은 이유)
-SCREEN_PROMPT = "아이 반응을 같이 살펴볼까요?"
-_SCREEN = re.compile(r"같이\s*살펴")
+SCREEN_PROMPT = "아이 반응을 같이 살펴볼까요?"          # 답변 뒤 칩
+SCREEN_HOME_PROMPT = "우리 아이, 잘 자라고 있는 걸까요?"   # 첫 화면 고정 칩
+# 문장 전체가 이 칩일 때만 잡는다. 긴 질문에 이 말이 섞여 있으면 진짜 질문이므로
+# 검색·답변 경로로 보내야 한다.
+_SCREEN = re.compile(
+    r"^\s*(?:아이\s*반응을?\s*같이\s*살펴|우리\s*아이[,\s]*잘\s*자라고\s*있)[^.?!]{0,12}[?!.~]*\s*$")
 # 근거 논문이 다룬 연령. 이 밖에는 과제 자체가 검증되지 않았다
 SCREEN_AGE_LO, SCREEN_AGE_HI = 18, 48
 
@@ -176,7 +180,7 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
             s = await repo.get_session(conn, session_id) or s
 
     # 관찰 시작: 검색·생성 없이 화면만 바꾼다
-    if _SCREEN.search(message) and age is not None and SCREEN_AGE_LO <= age <= SCREEN_AGE_HI:
+    if _SCREEN.search(message) and (age is None or SCREEN_AGE_LO <= age <= SCREEN_AGE_HI):
         return AskResponse(
             answer_id=None, intent="screening", highlights=[], areas=[], evidence_count=0,
             fallback_tier=0, can_recommend=False, ask_region=False, recommend_for=None,
@@ -505,17 +509,25 @@ async def followup_prompts(conn: asyncpg.Connection) -> list[str]:
 
 
 async def _rotate(conn: asyncpg.Connection, slot: str, n_take: int) -> list[dict]:
-    """Redis 있으면 라운드로빈(연속 호출이 항상 다른 묶음) · 없으면 무작위."""
+    """고정 칩은 항상 앞자리를 지키고, 남는 자리만 회전한다.
+
+    관찰로 들어오는 입구가 매번 보이지 않으면 기능이 있는 줄도 모른다.
+    Redis 있으면 라운드로빈(연속 호출이 항상 다른 묶음) · 없으면 무작위.
+    """
     import random
-    allp = await cache.cached(cache.key("prompts", slot, "v3"), get_settings().cache_ttl_read,
+    allp = await cache.cached(cache.key("prompts", slot, "v4"), get_settings().cache_ttl_read,
                               lambda: _fetch_prompts(conn, slot))
-    if len(allp) <= n_take:
-        return allp
+    pinned = [p for p in allp if p.get("pinned")][:n_take]
+    rest = [p for p in allp if not p.get("pinned")]
+    left = n_take - len(pinned)
+    if left <= 0:
+        return pinned
+    if len(rest) <= left:
+        return pinned + rest
     off = await cache.next_offset(cache.key("prompts", "rr", slot))
-    if off is None:
-        return random.sample(allp, n_take)
-    start = (off * n_take) % len(allp)
-    return [allp[(start + i) % len(allp)] for i in range(n_take)]
+    picked = (random.sample(rest, left) if off is None
+              else [rest[((off * left) + i) % len(rest)] for i in range(left)])
+    return pinned + picked
 
 
 async def _fetch_prompts(conn: asyncpg.Connection, slot: str) -> list[dict]:
