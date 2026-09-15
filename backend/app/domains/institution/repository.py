@@ -9,11 +9,15 @@ CARD_COLS = """
 
 # 둘러보기 정렬 — 화면의 칩 두 개와 1:1
 ORDER_BY = {
-    # 연락이 닿고 정보가 채워진 곳이 먼저. 영역 개수로 줄 세우면 11개를 다 하는 큰 기관만
-    # 앞으로 몰려 모든 카드가 같은 태그 벽이 된다 — 영역이 많다고 좋은 기관인 것도 아니다.
+    # 연락처·링크·단가가 채워진 곳이 먼저, 그다음은 가나다.
+    #
+    # 원래는 영역 개수 순이었는데, 그러면 11개를 다 하는 큰 기관만 앞으로 몰려서
+    # 첫 화면이 전부 같은 얼굴이 된다. 영역이 많다고 좋은 기관도 아니다 — 그냥 큰 곳이다.
+    # 지금 데이터에는 품질을 가릴 근거(대기·평가·치료사 수)가 없으므로, 없는 순위를
+    # 지어내는 대신 "정보가 채워져 카드가 비지 않는 곳"만 앞세우고 나머지는 가나다로 둔다.
     "recommended": """
         (tel IS NOT NULL)::int + (link_url IS NOT NULL)::int + (price_min IS NOT NULL)::int DESC,
-        cardinality(area_codes) DESC, name COLLATE "C"
+        name COLLATE "C"
     """,
     # 회기당 최저 단가가 싼 순. 단가 없는 곳은 뒤로
     "price": 'price_min ASC NULLS LAST, name COLLATE "C"',
