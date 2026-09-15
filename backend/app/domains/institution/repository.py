@@ -3,14 +3,18 @@ import asyncpg
 from app.domains.institution.areas import match_area_codes
 
 CARD_COLS = """
-  biz_no, name, sido, sigungu, area_codes, area_names,
+  biz_no, name, sido, sigungu, tel, area_codes, area_names,
   price_min, price_max, price_year, visit_available, link_url, has_own_site
 """
 
 # 둘러보기 정렬 — 화면의 칩 두 개와 1:1
 ORDER_BY = {
-    # 한 곳에서 여러 영역을 볼 수 있는 기관이 먼저. 점수는 화면에 내보내지 않고 순서로만 쓴다
-    "recommended": 'cardinality(area_codes) DESC, name COLLATE "C"',
+    # 연락이 닿고 정보가 채워진 곳이 먼저. 영역 개수로 줄 세우면 11개를 다 하는 큰 기관만
+    # 앞으로 몰려 모든 카드가 같은 태그 벽이 된다 — 영역이 많다고 좋은 기관인 것도 아니다.
+    "recommended": """
+        (tel IS NOT NULL)::int + (link_url IS NOT NULL)::int + (price_min IS NOT NULL)::int DESC,
+        cardinality(area_codes) DESC, name COLLATE "C"
+    """,
     # 회기당 최저 단가가 싼 순. 단가 없는 곳은 뒤로
     "price": 'price_min ASC NULLS LAST, name COLLATE "C"',
 }
@@ -60,7 +64,7 @@ async def search(conn: asyncpg.Connection, *, sido: str | None, region_id: int |
 
 async def get_card(conn: asyncpg.Connection, biz_no: str) -> asyncpg.Record | None:
     return await conn.fetchrow(
-        f"SELECT {CARD_COLS}, address, tel, lat, lon, operating_hours FROM mv_institution_card WHERE biz_no = $1",
+        f"SELECT {CARD_COLS}, address, lat, lon, operating_hours FROM mv_institution_card WHERE biz_no = $1",
         biz_no,
     )
 

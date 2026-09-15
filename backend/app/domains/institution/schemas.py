@@ -7,6 +7,7 @@ class InstitutionCard(BaseModel):
     name: str
     sido: str | None
     sigungu: str | None
+    tel: str | None = None          # 카드에서 바로 전화를 걸 수 있어야 한다
     area_codes: list[str] = []
     area_names: list[str] = []
     price_min: int | None
@@ -37,10 +38,9 @@ class PriceRow(BaseModel):
 
 class InstitutionDetail(InstitutionCard):
     address: str | None
-    tel: str | None
     lat: float | None
     lon: float | None
-    operating_hours: str | None      # 현재 전부 null → 프론트에서 행 숨김
+    operating_hours: str | None      # 카카오에서 확보한 곳만 (약 3분의 1) → 없으면 행 숨김
     prices: list[PriceRow]
     price_note: str                  # "2026년 공시 기준 · 변동될 수 있어요"
 

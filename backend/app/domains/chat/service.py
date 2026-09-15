@@ -16,7 +16,7 @@ from app.core.config import get_settings
 from app.core.errors import ApiError, ErrorCode
 from app.core.db import connection
 from app.core.gemini import GeminiError, gemini, generate_json_stream
-from app.domains.chat import prompts, repository as repo, summarize
+from app.domains.chat import prompts, regions, repository as repo, summarize
 from app.domains.chat.schemas import (AreaPriority, AskResponse, EvidenceListOut, RecommendedInstitution,
                                       RecommendResponse, SessionOut)
 from app.domains.institution import repository as inst_repo
@@ -46,6 +46,25 @@ _GREETING = re.compile(
 )
 _AGE_Y = re.compile(r"(\d{1,2})\s*(살|세)")
 _AGE_M = re.compile(r"(\d{1,3})\s*개월")
+
+# 추천 요청 문구를 걷어낸 뒤 아이 이야기가 남는지 보려고 쓴다.
+# "36개월인데 말이 느려요. 언어치료 기관 추천해주세요" 는 추천 요청이자 상담이다.
+# 이걸 추천 분기로만 보내면 방금 적은 걸 또 적으라고 되묻게 된다 (실측된 되묻기 문제).
+_RECO_PHRASE = re.compile(
+    r"(기관|센터|치료실|병원|곳|데)\s*(을|를|좀|도)?\s*(추천|찾아|알려|소개)\s*(해\s*)?(줘|주세요|주실래요|드려요)?"
+    r"|(네|응|예|좋아요?|그래)[,.!\s]*"
+    r"|(추천|부탁)\s*(해\s*)?(줘|주세요|드려요|합니다)?"
+    r"|근처|주변|가까운|우리\s*동네"
+)
+_FILLER = re.compile(r"[\s,.!?~·]|(좀|혹시|그럼|그러면|이제|저기|안녕하세요|안녕)")
+
+
+def _has_own_context(message: str) -> bool:
+    """추천 요청 말고 아이에 대한 이야기가 함께 들어 있는가."""
+    if _age_from(message) is not None:
+        return True
+    rest = _FILLER.sub("", _RECO_PHRASE.sub("", message))
+    return len(rest) >= 8
 
 
 def _age_from(message: str) -> int | None:
@@ -121,21 +140,37 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
                            ask_region=False, recommend_for=None,
                            next_prompts=["아이가 말이 느린 것 같아요", "또래와 어울리는 걸 어려워해요"]), None
 
-    # 추천 요청: 검색·생성 없이 라우팅만. 근거 답변이 있어야 하고, 지역이 없으면 먼저 묻는다
+    # 문장에 지역이 적혀 있으면 지금 잡아둔다 — 나중에 또 묻지 않으려고.
+    # ("분당 근처 언어치료 기관 추천해주세요" 에 대고 시·도부터 고르라고 하면 안 된다)
+    region_id = s["region_id"]
+    if region_id is None:
+        found = await regions.find_region(conn, message)
+        if found is not None:
+            await repo.set_session_region(conn, session_id, found["region_id"])
+            region_id = found["region_id"]
+            s = await repo.get_session(conn, session_id) or s
+
+    # 추천 요청: 검색·생성 없이 라우팅만. 근거 답변이 있어야 하고, 지역이 없으면 먼저 묻는다.
+    # 단, 아이 이야기가 함께 담긴 첫 문장은 추천 분기로 보내지 않는다 — 먼저 답을 하고
+    # 추천 칩을 띄운다. 그래야 "이미 말했는데 또 물어본다"가 생기지 않는다.
     if _RECO.search(message.strip()):
         last = await repo.latest_grounded_answer(conn, session_id)
-        if last is None:
+        if last is None and not _has_own_context(message):
             return AskResponse(answer_id=None, intent="need_context", highlights=[], areas=[], evidence_count=0,
                                fallback_tier=0, can_recommend=False, ask_region=False, recommend_for=None,
                                text="먼저 아이의 걱정되는 모습을 알려주시면, 맞는 치료영역을 찾은 뒤 기관을 추천해드릴게요.",
                                next_prompts=["아이가 말이 느린 것 같아요", "이름을 불러도 잘 쳐다보지 않아요"]), None
-        if s["region_id"] is None:
-            return AskResponse(answer_id=None, intent="pick_region", highlights=[], areas=[], evidence_count=0,
-                               fallback_tier=0, can_recommend=True, ask_region=True, recommend_for=last["answer_id"],
-                               text="어느 지역에서 찾아드릴까요? 시·도와 시·군·구를 골라주세요.", next_prompts=[]), None
-        return AskResponse(answer_id=None, intent="recommend", highlights=[], areas=[], evidence_count=0,
-                           fallback_tier=0, can_recommend=True, ask_region=False, recommend_for=last["answer_id"],
-                           text=f"{s['sido']} 기관을 찾아볼게요.", next_prompts=[]), None
+        if last is not None:
+            if region_id is None:
+                return AskResponse(answer_id=None, intent="pick_region", highlights=[], areas=[], evidence_count=0,
+                                   fallback_tier=0, can_recommend=True, ask_region=True,
+                                   recommend_for=last["answer_id"],
+                                   text="어느 지역에서 찾아드릴까요? 시·도와 시·군·구를 골라주세요.", next_prompts=[]), None
+            return AskResponse(answer_id=None, intent="recommend", highlights=[], areas=[], evidence_count=0,
+                               fallback_tier=0, can_recommend=True, ask_region=False,
+                               recommend_for=last["answer_id"],
+                               text=f"{s['sido']} {s['sigungu']} 기관을 찾아볼게요.", next_prompts=[]), None
+        # 근거 답변이 아직 없지만 아이 이야기가 있다 → 아래 일반 경로(검색 → 답변)로 내려간다
 
     try:
         evidence = await kb_service.retrieve(conn, message, age_months=age, top_k=cfg.top_k)
