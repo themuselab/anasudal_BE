@@ -107,7 +107,9 @@ def _llm_error(e: GeminiError) -> ApiError:
         return ApiError(503, ErrorCode.LLM_RATE_LIMITED,
                         "지금은 답변을 만들 수 없어요. 잠시 후 다시 시도해주세요",
                         {"retry_after_sec": max(5, min(e.retry_after, 300))})
-    if e.rate_limited:
+    if e.rate_limited or e.busy:
+        # busy = 모델 과부하(503). 재시도까지 다 해보고도 안 되면 여기로 온다.
+        # 우리 쪽 장애가 아니라 곧 풀리는 상황이라 원인 문자열을 사용자에게 보이지 않는다.
         return ApiError(503, ErrorCode.LLM_RATE_LIMITED, "지금 질문이 몰려 있어요. 몇 초 뒤 다시 시도해주세요",
                         {"retry_after_sec": max(5, e.retry_after or 5)})
     return ApiError(502, ErrorCode.LLM_FAILED, "답변 생성에 실패했어요. 잠시 후 다시 시도해주세요", {"cause": str(e)[:300]})

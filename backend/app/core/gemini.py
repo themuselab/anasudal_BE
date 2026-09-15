@@ -5,6 +5,7 @@ SDK 대신 httpx 로 직접 호출: 의존성이 가볍고 응답 스키마가 �
   · 답변·임베딩 = 사용자가 기다리는 경로. 여러 키를 돌려 쓰고 한도에 걸린 키는 바로 건너뛴다.
   · 요약        = 백그라운드로 DB 에 쌓는 용도. 답변 쿼터를 갉아먹지 않게 키를 분리한다.
 """
+import asyncio
 import json
 import logging
 import re
@@ -24,11 +25,12 @@ T = TypeVar("T")
 
 class GeminiError(RuntimeError):
     def __init__(self, msg: str, rate_limited: bool = False, exhausted: bool = False,
-                 retry_after: int = 0) -> None:
+                 retry_after: int = 0, busy: bool = False) -> None:
         super().__init__(msg)
         self.rate_limited = rate_limited    # 429 를 맞았다
         self.exhausted = exhausted          # 풀의 키가 전부 쉬는 중 → 사람 손이 필요하거나 대체 응답으로
         self.retry_after = retry_after      # 초
+        self.busy = busy                    # 503 등 모델 과부하. 우리 잘못이 아니고 곧 풀린다
 
 
 @dataclass
@@ -64,9 +66,26 @@ def _is_429(status: int, data: dict[str, Any]) -> bool:
     return status == 429 or (data.get("error") or {}).get("code") == 429
 
 
+# 모델이 붐빌 때 오는 것들. 한도(429)와 다르다 — 키를 쉬게 할 이유가 없고,
+# 잠깐 뒤에 다시 부르면 대개 된다. 그냥 올리면 사용자에게 "답변 생성에 실패했어요"가 나간다.
+_TRANSIENT = {500, 502, 503, 504}
+_BACKOFF = (0.6, 1.5, 3.0)      # 초. 합쳐도 5초 남짓 — 사용자가 기다리는 경로라 길게 못 끈다
+
+
+def _is_transient(status: int, data: dict[str, Any]) -> bool:
+    return status in _TRANSIENT or (data.get("error") or {}).get("code") in _TRANSIENT
+
+
 class _RateLimited(Exception):
     def __init__(self, limit: _Limit) -> None:
         self.limit = limit
+
+
+class _Transient(Exception):
+    """일시적 과부하. 같은 키로 다시 해도 되지만, 이왕이면 다음 키로 넘긴다."""
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 class Gemini:
@@ -88,6 +107,7 @@ class Gemini:
         if not pool:
             raise GeminiError(f"{what}: Gemini 키가 설정되지 않았습니다")
         tried = 0
+        shaky = 0                      # 일시적 과부하로 다시 시도한 횟수
         last: _Limit | None = None
         while True:
             key = await pool.pick()
@@ -100,6 +120,14 @@ class Gemini:
                 )
             try:
                 return await run(key)
+            except _Transient as e:
+                if shaky >= len(_BACKOFF):
+                    raise GeminiError(f"{what}: 모델이 계속 붐빕니다 ({e.message})",
+                                      retry_after=int(_BACKOFF[-1]), busy=True) from None
+                await asyncio.sleep(_BACKOFF[shaky])
+                shaky += 1
+                log.info("gemini %s 일시 오류 — %d번째 재시도", what, shaky)
+                continue               # 다음 키로 (pick 이 라운드로빈이라 자연히 바뀐다)
             except _RateLimited as e:
                 last = e.limit
                 await pool.rest(key, e.limit.retry_after, f"{what} {'일일' if e.limit.daily else '분당'} 한도")
@@ -134,6 +162,8 @@ class Gemini:
         data = r.json()
         if _is_429(r.status_code, data):
             raise _RateLimited(_read_limit(data))
+        if _is_transient(r.status_code, data):
+            raise _Transient(str((data.get("error") or {}).get("message", r.status_code))[:120])
         if "embedding" not in data:
             raise GeminiError(f"embed failed: {json.dumps(data, ensure_ascii=False)[:200]}")
         return data["embedding"]["values"]
@@ -164,6 +194,8 @@ class Gemini:
             data = r.json()
             if _is_429(r.status_code, data):
                 raise _RateLimited(_read_limit(data))
+            if _is_transient(r.status_code, data):
+                raise _Transient(str((data.get("error") or {}).get("message", r.status_code))[:120])
             try:
                 return _parse_json(data["candidates"][0]["content"]["parts"][0]["text"])
             except (KeyError, IndexError):
@@ -282,6 +314,7 @@ async def generate_json_stream(system: str, user: str, schema: dict[str, Any] | 
         raise GeminiError("답변 생성: Gemini 키가 설정되지 않았습니다")
 
     tried = 0
+    shaky = 0
     last: _Limit | None = None
     while True:
         key = await pool.pick()
@@ -312,6 +345,15 @@ async def generate_json_stream(system: str, user: str, schema: dict[str, Any] | 
                             rate_limited=True, exhausted=True, retry_after=last.retry_after,
                         )
                     continue                      # 다음 키로 다시
+                if _is_transient(r.status_code, data):
+                    # 아직 한 글자도 안 보냈으니 다시 시도해도 화면이 어긋나지 않는다
+                    if shaky >= len(_BACKOFF):
+                        raise GeminiError("답변 생성: 모델이 계속 붐빕니다",
+                                          retry_after=int(_BACKOFF[-1]), busy=True)
+                    await asyncio.sleep(_BACKOFF[shaky])
+                    shaky += 1
+                    log.info("gemini 스트리밍 일시 오류 — %d번째 재시도", shaky)
+                    continue
                 raise GeminiError(f"generate failed: {json.dumps(data, ensure_ascii=False)[:300]}")
 
             async for line in r.aiter_lines():
