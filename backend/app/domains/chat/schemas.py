@@ -40,7 +40,8 @@ class AskRequest(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
 
 
-Intent = Literal["answer", "diagnosis", "out_of_scope", "recommend", "pick_region", "need_context"]
+Intent = Literal["answer", "diagnosis", "out_of_scope", "recommend", "pick_region", "need_context",
+                 "screening"]
 
 
 class AskResponse(BaseModel):
@@ -55,6 +56,9 @@ class AskResponse(BaseModel):
     ask_region: bool                     # True면 시·도/시·군·구 선택 UI 노출 → /chat/recommend 에 region_id
     recommend_for: UUID | None           # 추천 호출 시 쓸 answer_id (최근 근거 답변)
     next_prompts: list[str]              # 후속 칩
+    # 조기 관찰(같이 살펴보기)을 이어서 할 수 있는 월령이면 그 값. 아니면 None.
+    # 화면은 이 값이 있을 때만 관찰 칩을 띄우고, 값 자체를 /v2/screening/tasks 에 넘긴다.
+    screen_age_months: int | None = None
 
 
 class EvidenceListOut(BaseModel):

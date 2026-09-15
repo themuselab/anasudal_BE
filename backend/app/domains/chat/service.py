@@ -36,6 +36,12 @@ _RECO = re.compile(
     r"(기관|센터|치료실|병원|곳|데)\s*(을|를|좀|도)?\s*(추천|찾아|알려|소개)"   # "기관 추천해줘", "센터 찾아줘"
     r"|^\s*((네|응|예|좋아요?|그래)[,.!\s]*)?(추천\s*)?(해\s*줘|해\s*주세요|부탁\s*(해요?|드려요?|합니다)?)?\s*[!.~]*$"   # "네, 추천해주세요" / "추천해줘" / "네"
 )
+# "같이 살펴볼까요?" 칩. 문구가 아니라 동작이라 코드에 둔다 (_RECO 와 같은 이유)
+SCREEN_PROMPT = "아이 반응을 같이 살펴볼까요?"
+_SCREEN = re.compile(r"같이\s*살펴")
+# 근거 논문이 다룬 연령. 이 밖에는 과제 자체가 검증되지 않았다
+SCREEN_AGE_LO, SCREEN_AGE_HI = 18, 48
+
 # 가벼운 인사·서비스 문의 — 검색·생성 없이 무엇을 해주는 곳인지 알려준다
 _GREETING = re.compile(
     r"^\s*(?:"
@@ -118,6 +124,16 @@ def _llm_error(e: GeminiError) -> ApiError:
     return ApiError(502, ErrorCode.LLM_FAILED, "답변 생성에 실패했어요. 잠시 후 다시 시도해주세요", {"cause": str(e)[:300]})
 
 
+def _screen_age(age: int | None) -> int | None:
+    """관찰 과제를 이어서 할 수 있는 월령인지. 아니면 None 이라 화면이 칩을 안 띄운다.
+
+    자폐를 언급한 질문에만 띄우지 않는다 — "자폐 얘기를 꺼냈더니 검사를 권하더라"는
+    사실상 라벨이고, 진단하지 않는다는 원칙과도 부딪힌다. 근거 있는 답변이 나온
+    18~48개월이면 무엇을 물었든 똑같이 제안한다.
+    """
+    return age if age is not None and SCREEN_AGE_LO <= age <= SCREEN_AGE_HI else None
+
+
 async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> tuple[AskResponse | None, _Ctx | None]:
     """게이트·라우팅·검색까지. 생성이 필요 없으면 즉시 응답을 돌려준다 (ask / ask_stream 공용)."""
     s = await repo.get_session(conn, session_id)
@@ -154,6 +170,15 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
             await repo.set_session_region(conn, session_id, found["region_id"])
             region_id = found["region_id"]
             s = await repo.get_session(conn, session_id) or s
+
+    # 관찰 시작: 검색·생성 없이 화면만 바꾼다
+    if _SCREEN.search(message) and age is not None and SCREEN_AGE_LO <= age <= SCREEN_AGE_HI:
+        return AskResponse(
+            answer_id=None, intent="screening", highlights=[], areas=[], evidence_count=0,
+            fallback_tier=0, can_recommend=False, ask_region=False, recommend_for=None,
+            text="아이와 함께 몇 가지를 해보면서 어떤 모습이 보이는지 적어볼게요. "
+                 "진단이 아니라 참고용 기록이에요.",
+            next_prompts=[], screen_age_months=age), None
 
     # 추천 요청: 검색·생성 없이 라우팅만. 근거 답변이 있어야 하고, 지역이 없으면 먼저 묻는다.
     # 단, 아이 이야기가 함께 담긴 첫 문장은 추천 분기로 보내지 않는다 — 먼저 답을 하고
@@ -226,8 +251,16 @@ async def _finalize(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx, out: 
         # 절차·제도 질문(tier 2)은 답을 듣고 나면 "그래서 우리 애는?" 이 남는데
         # 아무것도 안 주면 대화가 거기서 끊긴다.
         # "네, 추천해주세요" 만 코드에 둔다 — 문구가 아니라 동작이라 _RECO 정규식과 짝이다.
-        next_prompts=(["네, 추천해주세요"] if tier == 1 else await followup_prompts(conn)),
+        next_prompts=(_tier1_prompts(age) if tier == 1 else await followup_prompts(conn)),
+        screen_age_months=_screen_age(age) if tier < 3 else None,
     )
+
+
+def _tier1_prompts(age: int | None) -> list[str]:
+    chips = ["네, 추천해주세요"]
+    if _screen_age(age) is not None:
+        chips.append(SCREEN_PROMPT)
+    return chips
 
 
 async def _degraded(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx) -> AskResponse:
@@ -261,7 +294,8 @@ async def _degraded(conn: asyncpg.Connection, session_id: UUID, ctx: _Ctx) -> As
         evidence_count=len(ev), fallback_tier=2, can_recommend=bool(areas),
         ask_region=(bool(areas) and ctx.s["region_id"] is None),
         recommend_for=(aid if areas else None),
-        next_prompts=(["네, 추천해주세요"] if areas else await followup_prompts(conn)),
+        next_prompts=(_tier1_prompts(ctx.age) if areas else await followup_prompts(conn)),
+        screen_age_months=_screen_age(ctx.age),
     )
 
 
