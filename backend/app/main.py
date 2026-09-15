@@ -43,9 +43,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (region_router, institution_router, knowledge_router, chat_router, feedback_router,
-          screening_router):
+for r in (region_router, institution_router, knowledge_router, chat_router, feedback_router):
     app.include_router(r, prefix="/v1")
+
+# 조기 관찰은 v2. 기존 화면과 쓰임이 달라 수명도 따로 간다 —
+# v1 을 건드리지 않고 과제·응답 형식을 바꿀 수 있어야 한다.
+app.include_router(screening_router, prefix="/v2")
 
 
 install_error_handlers(app)
