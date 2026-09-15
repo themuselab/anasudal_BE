@@ -17,6 +17,12 @@ def source_id(src: str) -> int:
         return 3
     if "전자바우처" in src:
         return 4
+    if "별표 5" in src:
+        return 6
+    if "아이사랑" in src:
+        return 7
+    if "정밀검사비" in src:
+        return 8
     return 5
 
 
