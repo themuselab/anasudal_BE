@@ -45,6 +45,9 @@ _SCREEN = re.compile(
     r"^\s*(?:아이\s*반응을?\s*같이\s*살펴|우리\s*아이[,\s]*잘\s*자라고\s*있)[^.?!]{0,12}[?!.~]*\s*$")
 # 근거 논문이 다룬 연령. 이 밖에는 과제 자체가 검증되지 않았다
 SCREEN_AGE_LO, SCREEN_AGE_HI = 18, 48
+# 월령을 물을 때 같이 주는 빠른 답. 과제 세트가 갈리는 지점(18·24·36)을 걸치도록 골랐다.
+# 정확한 개월을 아는 부모는 그냥 입력하면 된다.
+AGE_CHIPS = ["18개월", "24개월", "30개월", "36개월", "42개월"]
 
 # 가벼운 인사·서비스 문의 — 검색·생성 없이 무엇을 해주는 곳인지 알려준다
 _GREETING = re.compile(
@@ -81,10 +84,13 @@ def _has_own_context(message: str) -> bool:
 
 
 def _age_from(message: str) -> int | None:
+    """문장에서 월령을 읽는다. "2살 6개월" 처럼 둘이 같이 오면 합친다."""
+    y = _AGE_Y.search(message)
     m = _AGE_M.search(message)
+    if y and m:                              # "2살 6개월" → 30
+        return int(y.group(1)) * 12 + int(m.group(1))
     if m:
         return int(m.group(1))
-    y = _AGE_Y.search(message)
     if y:
         return int(y.group(1)) * 12          # "6살" → 72개월 (만 나이 가정)
     return None
@@ -181,6 +187,15 @@ async def _prepare(conn: asyncpg.Connection, session_id: UUID, message: str) -> 
 
     # 관찰 시작: 검색·생성 없이 화면만 바꾼다
     if _SCREEN.search(message) and (age is None or SCREEN_AGE_LO <= age <= SCREEN_AGE_HI):
+        if age is None:
+            # 월령을 모르면 먼저 묻는다. 카드로 띄우지 않고 대화로 묻는다 —
+            # 부모는 그냥 "30개월이요" 라고 답하면 되고, 칩은 빠른 길일 뿐이다.
+            return AskResponse(
+                answer_id=None, intent="screening", highlights=[], areas=[], evidence_count=0,
+                fallback_tier=0, can_recommend=False, ask_region=False, recommend_for=None,
+                text=("같이 살펴볼게요. 먼저 **아이가 몇 개월인가요?**\n\n"
+                      "월령에 따라 해볼 것이 달라져서요. 개월 수로 알려주시거나 아래에서 골라주세요."),
+                next_prompts=AGE_CHIPS, screen_age_months=None), None
         return AskResponse(
             answer_id=None, intent="screening", highlights=[], areas=[], evidence_count=0,
             fallback_tier=0, can_recommend=False, ask_region=False, recommend_for=None,
