@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """새로 만든 청크만 DB 에 반영한다 (전체 재적재 없이).
 
+    python scripts/load_kb_screening.py [유형 …]     기본값: screening
+
 db/02_load.sql 은 psql \copy 로 전부를 다시 넣는다. 도커 없이, 그리고 이미
 돌고 있는 서비스를 건드리지 않고 증분만 넣으려고 따로 둔다.
 
@@ -16,6 +18,11 @@ import asyncpg
 
 # source 문자열 → (publisher, title, year, url, license)
 SOURCES = {
+    "국가건강정보포털 정상소아의 성장(발달)": (
+        "질병관리청", "국가건강정보포털 — 정상소아의 성장(발달)", 2026,
+        "https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/gnrlzHealthInfo/"
+        "gnrlzHealthInfoView.do?cntnts_sn=6485",
+        "공공누리 제4유형 (출처표시·상업적이용금지·변경금지)"),
     "보건복지부 건강검진 실시기준 [별표 5] 영유아건강검진 결과 판정기준": (
         "보건복지부", "건강검진 실시기준 [별표 5] 영유아건강검진 결과 판정기준", 2026,
         "https://www.law.go.kr/LSW//flDownload.do?flSeq=136957893",
@@ -37,8 +44,9 @@ async def main() -> None:
     for ln in io.open("data/kb/kb_vectors.jsonl", encoding="utf-8"):
         r = json.loads(ln)
         vec[r["id"]] = r["v"]
+    types = [a for a in sys.argv[1:] if not a.startswith("--")] or ["screening"]
     new = [json.loads(ln) for ln in io.open("data/kb/kb_chunks.jsonl", encoding="utf-8")
-           if json.loads(ln)["type"] == "screening"]
+           if json.loads(ln)["type"] in types]
     missing = [c["id"] for c in new if c["id"] not in vec]
     if missing:
         sys.exit(f"임베딩이 없는 청크가 있습니다: {missing[:3]}")
