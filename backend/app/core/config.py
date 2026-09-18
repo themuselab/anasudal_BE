@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     gemini_gen_model: str = "models/gemini-3.6-flash"
     gemini_thinking_level: str = "low"   # 측정: low → 첫 글자 1.4s/전체 3.1s (기본 7.5s/8.9s). 근거 요약엔 충분
     embed_dim: int = 768
-    top_k: int = 3                      # 측정: k=3에서 적중 96% / 정밀 80%
+    top_k: int = 4                      # 측정: 적중이 k=4에서 천장(89%), k=5는 정밀만 -3%p (rag-tuning 15번)
     session_ttl_hours: int = 24
     cors_origins: str = "http://localhost:3000"
 

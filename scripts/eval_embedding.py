@@ -57,12 +57,15 @@ def norm(v):
 
 
 def is_hit(doc, q):
-    if q.get("expect_types") and doc["type"] in q["expect_types"]:
-        return True
-    for kw in q.get("expect_keywords", []):
-        if kw in doc["text"]:
-            return True
-    return False
+    """정답 = 이 질문에 나와야 할 출처 문서에서 온 조각인가.
+
+    expect_keywords 는 더 쓰지 않는다. "이 단어가 들어 있으면 맞는 답"은 팀이 주장할
+    근거가 없는 판단이었고, "발달" 두 글자가 청크의 85%%에 들어 있어 숫자를 부풀렸다.
+    expect_types 는 출처 문서와 1:1 이라 "이 질문에는 질병관리청 OO 문서가 나와야 한다"
+    라는 뜻이 되고, 기대 유형마다 그 문서의 실제 문장을 expect_why 에 적어뒀다.
+    경위는 backend/docs/rag-tuning.md 15번.
+    """
+    return bool(q.get("expect_types")) and doc["type"] in q["expect_types"]
 
 
 def age_ok(doc, age):
