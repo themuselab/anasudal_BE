@@ -71,10 +71,13 @@ def _is_429(status: int, data: dict[str, Any]) -> bool:
 _TRANSIENT = {500, 502, 503, 504}
 _BACKOFF = (0.6, 1.5, 3.0)
 
-# 스트림이 열린 뒤 조각이 이만큼 안 오면 멎은 것으로 본다.
-# 앞단 nginx 가 60초에 끊는데, 그때까지 기다리면 화면은 로딩만 돌다 아무 일 없이 끝난다.
-# 붐빌 때 첫 조각까지 10초 넘게 걸리는 일이 있어 넉넉히 잡았다.
-_STALL_SEC = 25.0      # 초. 합쳐도 5초 남짓 — 사용자가 기다리는 경로라 길게 못 끈다
+# 앞단이 30초(CloudFront)에 끊는다. 그 전에 우리가 먼저 알아채고 error 이벤트를
+# 내보내야 화면이 "로딩만 돌다 아무 일 없이 끝나는" 꼴을 면한다. 그래서 20초다.
+#   · _STALL_SEC   스트림이 열린 뒤 조각이 안 올 때
+#   · _STREAM_READ 응답 헤더조차 안 올 때 (httpx 읽기 시한)
+# 붐빌 때 첫 조각까지 10초 넘게 걸리는 걸 봐서 그보다는 넉넉히 뒀다.
+_STALL_SEC = 20.0
+_STREAM_READ = httpx.Timeout(20.0, connect=10.0)      # 초. 합쳐도 5초 남짓 — 사용자가 기다리는 경로라 길게 못 끈다
 
 
 def _is_transient(status: int, data: dict[str, Any]) -> bool:
@@ -354,64 +357,77 @@ async def generate_json_stream(system: str, user: str, schema: dict[str, Any] | 
             )
 
         buf, ext, started = "", _AnswerExtractor(), False
-        async with g._http.stream(
-            "POST", f"{_BASE}/{g.gen_model}:streamGenerateContent?alt=sse&key={key}", json=payload
-        ) as r:
-            if r.status_code != 200:
-                body = await r.aread()
-                try:
-                    data = json.loads(body)
-                except json.JSONDecodeError:
-                    data = {"error": {"message": body[:200].decode(errors="ignore")}}
-                if _is_429(r.status_code, data):
-                    last = _read_limit(data)
-                    await pool.rest(key, last.retry_after, f"스트리밍 {'일일' if last.daily else '분당'} 한도")
-                    tried += 1
-                    if tried >= len(pool.keys):
-                        raise GeminiError(
-                            f"답변 생성: 키 {len(pool.keys)}개가 모두 한도에 걸렸습니다 ({last.message})",
-                            rate_limited=True, exhausted=True, retry_after=last.retry_after,
-                        )
-                    continue                      # 다음 키로 다시
-                if _is_transient(r.status_code, data):
-                    # 아직 한 글자도 안 보냈으니 다시 시도해도 화면이 어긋나지 않는다
-                    if shaky >= len(_BACKOFF):
-                        raise GeminiError("답변 생성: 모델이 계속 붐빕니다",
-                                          retry_after=int(_BACKOFF[-1]), busy=True)
-                    await asyncio.sleep(_BACKOFF[shaky])
-                    shaky += 1
-                    log.info("gemini 스트리밍 일시 오류 — %d번째 재시도", shaky)
-                    continue
-                raise GeminiError(f"generate failed: {json.dumps(data, ensure_ascii=False)[:300]}")
+        # httpx 의 시간 초과를 잡지 않으면 예외가 그대로 올라가 SSE 가 종료 이벤트 없이
+        # 죽는다 — 화면은 로딩만 돌다 질문만 남는다. 붐빔으로 번역해 다시 시도를 권한다.
+        try:
+            async with g._http.stream(
+                "POST", f"{_BASE}/{g.gen_model}:streamGenerateContent?alt=sse&key={key}",
+                json=payload, timeout=_STREAM_READ,
+            ) as r:
+                if r.status_code != 200:
+                    body = await r.aread()
+                    try:
+                        data = json.loads(body)
+                    except json.JSONDecodeError:
+                        data = {"error": {"message": body[:200].decode(errors="ignore")}}
+                    if _is_429(r.status_code, data):
+                        last = _read_limit(data)
+                        await pool.rest(key, last.retry_after, f"스트리밍 {'일일' if last.daily else '분당'} 한도")
+                        tried += 1
+                        if tried >= len(pool.keys):
+                            raise GeminiError(
+                                f"답변 생성: 키 {len(pool.keys)}개가 모두 한도에 걸렸습니다 ({last.message})",
+                                rate_limited=True, exhausted=True, retry_after=last.retry_after,
+                            )
+                        continue                      # 다음 키로 다시
+                    if _is_transient(r.status_code, data):
+                        # 아직 한 글자도 안 보냈으니 다시 시도해도 화면이 어긋나지 않는다
+                        if shaky >= len(_BACKOFF):
+                            raise GeminiError("답변 생성: 모델이 계속 붐빕니다",
+                                              retry_after=int(_BACKOFF[-1]), busy=True)
+                        await asyncio.sleep(_BACKOFF[shaky])
+                        shaky += 1
+                        log.info("gemini 스트리밍 일시 오류 — %d번째 재시도", shaky)
+                        continue
+                    raise GeminiError(f"generate failed: {json.dumps(data, ensure_ascii=False)[:300]}")
 
-            stalled = False
-            it = r.aiter_lines().__aiter__()
-            while True:
-                try:
-                    line = await asyncio.wait_for(it.__anext__(), timeout=_STALL_SEC)
-                except StopAsyncIteration:
-                    break
-                except (asyncio.TimeoutError, TimeoutError):
-                    stalled = True
-                    log.warning("스트림이 %.0f초 동안 멎었다 — 본문 %d자", _STALL_SEC, len(ext.emitted))
-                    break
-                if not line.startswith("data:"):
-                    continue
-                try:
-                    ev = json.loads(line[5:].strip())
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("error"):
-                    raise GeminiError(f"generate failed: {json.dumps(ev['error'], ensure_ascii=False)[:300]}")
-                try:
-                    piece = ev["candidates"][0]["content"]["parts"][0]["text"]
-                except (KeyError, IndexError):
-                    continue
-                buf += piece
-                delta = ext.feed(buf)
-                if delta:
-                    started = True
-                    yield ("delta", delta)
+                stalled = False
+                it = r.aiter_lines().__aiter__()
+                while True:
+                    try:
+                        line = await asyncio.wait_for(it.__anext__(), timeout=_STALL_SEC)
+                    except StopAsyncIteration:
+                        break
+                    except (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException):
+                        stalled = True
+                        log.warning("스트림이 %.0f초 동안 멎었다 — 본문 %d자", _STALL_SEC, len(ext.emitted))
+                        break
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        ev = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+                    if ev.get("error"):
+                        raise GeminiError(f"generate failed: {json.dumps(ev['error'], ensure_ascii=False)[:300]}")
+                    try:
+                        piece = ev["candidates"][0]["content"]["parts"][0]["text"]
+                    except (KeyError, IndexError):
+                        continue
+                    buf += piece
+                    delta = ext.feed(buf)
+                    if delta:
+                        started = True
+                        yield ("delta", delta)
+
+        except httpx.TimeoutException:
+            log.warning("gemini 스트리밍: 시간 초과 (%.0f초) — 본문 %d자",
+                        _STREAM_READ.read, len(ext.emitted))
+            if ext.emitted:                     # 본문은 나갔다 — 버리지 않고 살린다
+                yield ("final", _salvage(buf, ext.emitted))
+                return
+            raise GeminiError("답변 생성: 모델이 제때 응답하지 못했습니다",
+                              retry_after=int(_BACKOFF[-1]), busy=True)
 
         if stalled and not ext.emitted:
             raise GeminiError("답변 생성: 모델이 응답을 멈췄습니다",
