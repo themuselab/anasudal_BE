@@ -69,7 +69,12 @@ def _is_429(status: int, data: dict[str, Any]) -> bool:
 # 모델이 붐빌 때 오는 것들. 한도(429)와 다르다 — 키를 쉬게 할 이유가 없고,
 # 잠깐 뒤에 다시 부르면 대개 된다. 그냥 올리면 사용자에게 "답변 생성에 실패했어요"가 나간다.
 _TRANSIENT = {500, 502, 503, 504}
-_BACKOFF = (0.6, 1.5, 3.0)      # 초. 합쳐도 5초 남짓 — 사용자가 기다리는 경로라 길게 못 끈다
+_BACKOFF = (0.6, 1.5, 3.0)
+
+# 스트림이 열린 뒤 조각이 이만큼 안 오면 멎은 것으로 본다.
+# 앞단 nginx 가 60초에 끊는데, 그때까지 기다리면 화면은 로딩만 돌다 아무 일 없이 끝난다.
+# 붐빌 때 첫 조각까지 10초 넘게 걸리는 일이 있어 넉넉히 잡았다.
+_STALL_SEC = 25.0      # 초. 합쳐도 5초 남짓 — 사용자가 기다리는 경로라 길게 못 끈다
 
 
 def _is_transient(status: int, data: dict[str, Any]) -> bool:
@@ -379,7 +384,17 @@ async def generate_json_stream(system: str, user: str, schema: dict[str, Any] | 
                     continue
                 raise GeminiError(f"generate failed: {json.dumps(data, ensure_ascii=False)[:300]}")
 
-            async for line in r.aiter_lines():
+            stalled = False
+            it = r.aiter_lines().__aiter__()
+            while True:
+                try:
+                    line = await asyncio.wait_for(it.__anext__(), timeout=_STALL_SEC)
+                except StopAsyncIteration:
+                    break
+                except (asyncio.TimeoutError, TimeoutError):
+                    stalled = True
+                    log.warning("스트림이 %.0f초 동안 멎었다 — 본문 %d자", _STALL_SEC, len(ext.emitted))
+                    break
                 if not line.startswith("data:"):
                     continue
                 try:
@@ -398,6 +413,9 @@ async def generate_json_stream(system: str, user: str, schema: dict[str, Any] | 
                     started = True
                     yield ("delta", delta)
 
+        if stalled and not ext.emitted:
+            raise GeminiError("답변 생성: 모델이 응답을 멈췄습니다",
+                              retry_after=int(_BACKOFF[-1]), busy=True)
         if not buf and not started:
             raise GeminiError("generate failed: 빈 응답")
         try:
