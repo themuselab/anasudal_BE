@@ -236,6 +236,29 @@ def _parse_json(text: str) -> dict[str, Any]:
     return json.loads(m.group(0))
 
 
+def _salvage(buf: str, answer: str) -> dict[str, Any]:
+    """닫히지 않은 JSON 에서 건질 수 있는 것만 건진다.
+
+    `answer` 는 이미 화면에 흘러간 본문이라 그대로 쓴다. `grounded` 는 true 로 둔다 —
+    _AnswerExtractor 가 grounded=false 를 보면 애초에 한 글자도 내보내지 않으므로,
+    본문이 있다는 것 자체가 범위 안이라는 뜻이다.
+    """
+    out: dict[str, Any] = {"grounded": True, "answer": answer, "areas": [], "keywords": []}
+    m = re.search(r'"areas"\s*:\s*(\[.*?\])', buf, re.S)
+    if m:
+        try:
+            out["areas"] = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
+    m = re.search(r'"keywords"\s*:\s*(\[.*?\])', buf, re.S)
+    if m:
+        try:
+            out["keywords"] = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            pass
+    return out
+
+
 _client: Gemini | None = None
 
 
@@ -377,5 +400,15 @@ async def generate_json_stream(system: str, user: str, schema: dict[str, Any] | 
 
         if not buf and not started:
             raise GeminiError("generate failed: 빈 응답")
-        yield ("final", _parse_json(buf))
+        try:
+            out = _parse_json(buf)
+        except (GeminiError, json.JSONDecodeError):
+            # 스트림이 JSON 을 닫기 전에 끊겼다. 모델이 붐빌 때(503) 가끔 이렇게 끝난다.
+            # 여기서 버리면 부모는 글자가 차오르다가 "답변 생성에 실패했어요"로 바뀌는 걸 본다 —
+            # 이미 화면에 나간 본문이 있으면 그걸 살린다. 영역을 못 읽으면 tier 2 로 떨어질 뿐이다.
+            if not ext.emitted:
+                raise
+            log.warning("스트림이 JSON 을 닫기 전에 끊겼다 — 본문 %d자로 복구", len(ext.emitted))
+            out = _salvage(buf, ext.emitted)
+        yield ("final", out)
         return
