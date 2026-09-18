@@ -40,6 +40,24 @@
 환경변수는 시작할 때 주입되므로 `aws ecs update-service --force-new-deployment` 가 필요하다.
 Gemini 키를 추가하고 왜 안 붙는지 헤매기 쉬운 지점이다.
 
+**주의할 점 둘**: 코드의 기본값이 SSM 에 있는 값을 이기지 못한다. `config.py` 의
+`top_k` 를 4 로 바꾸고 배포했는데 근거가 3 건으로 나온 적이 있다 — `TOP_K` 가 SSM 에서
+주입되고 있었고 거기엔 아직 3 이 있었다. 코드만 고치면 안 되고 셋을 같이 움직여야 한다.
+
+```
+config.py (기본값)  ·  infra/terraform/variables.tf (선언)  ·  SSM 파라미터 (실제 주입값)
+```
+
+바꾸는 절차는 이렇다.
+
+```bash
+aws ssm put-parameter --name /anasudal/prod/TOP_K --value 4 --type String --overwrite   --region ap-northeast-2
+aws ecs update-service --cluster anasudal-prod --service api --force-new-deployment   --region ap-northeast-2
+```
+
+또는 `infra/terraform` 에서 `terraform apply` 로 파라미터를 맞춘 뒤 위의 두 번째 명령을
+돌린다. 터라폼은 파라미터만 바꾸고 돌고 있는 태스크는 건드리지 않는다.
+
 ---
 
 ## 2. 데이터 두 갈래

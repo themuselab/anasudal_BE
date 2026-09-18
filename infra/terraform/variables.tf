@@ -35,7 +35,9 @@ variable "gemini_summary_key" {
   sensitive = true
 }
 variable "cors_origins" { default = "http://localhost:5173" }
-variable "top_k" { default = "3" }
+# 근거를 몇 건 넘길까. 측정으로 정한 값이라 바꾸려면 회귀부터 —
+# backend/docs/rag-tuning.md 15번. 코드 기본값(config.py)과 같이 움직여야 한다.
+variable "top_k" { default = "4" }
 
 # ── CI (GitHub Actions OIDC). 비우면 IAM 역할을 만들지 않음
 variable "github_repo" {
